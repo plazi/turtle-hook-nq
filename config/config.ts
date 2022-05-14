@@ -1,6 +1,8 @@
 export const config = {
-  repository: "plazi/treatments-rdf",
   branch: "main",
-  uploadUri: "blazegraph:8080",
+  graphUriPrefix: "https://raw.githubusercontent.com/plazi/treatments-rdf/main",
   postUpdateFile: "config/postupdate.sparql",
+  repository: "plazi/treatments-rdf",
+  repositoryWebUri: "https://plazi.github.io/treatments-rdf",
+  uploadUri: "blazegraph:8080",
 };

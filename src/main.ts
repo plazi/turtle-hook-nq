@@ -1,23 +1,48 @@
 import { Server, Status, STATUS_TEXT } from "./deps.ts";
 import { config } from "../config/config.ts";
 
+// Incomplete, only what we need
+type webhookPayload = {
+  repository: {
+    full_name: string;
+  };
+  commits: {
+    added: string[];
+    removed: string[];
+    modified: string[];
+  }[];
+};
+
+const fileUri = (fileName: string) =>
+  `<${config.repositoryWebUri}/${fileName}>`;
+
+const graphUri = (fileName: string) =>
+  `<${config.graphUriPrefix}/${fileName.replace(/\.ttl$/, "")}`;
+
+/* SPARQL A LA (note the .ttl and domains) `
+LOAD <https://plazi.github.io/treatments-rdf/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91.ttl> INTO GRAPH <https://raw.githubusercontent.com/plazi/treatments-rdf/main/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91>
+` */
+const loadQuery = (fileName: string) =>
+  `DROP ${graphUri(fileName)};
+  LOAD ${fileUri(fileName)} INTO GRAPH ${graphUri(fileName)}`;
+
 const webhookHandler = async (request: Request) => {
   if (request.method === "POST") {
     try {
-      const json = await request.json();
-      const repoName = json.repository?.full_name;
-      // deno-lint-ignore no-explicit-any
-      const commits = (json.commits as any[]).map((
-        { id, added, removed, modified },
-      ) => ({ id, added, removed, modified }));
-      console.log("· got webhook from", repoName);
-      console.log("> got added   ", commits.flatMap((c) => c.added));
-      console.log("> got removed ", commits.flatMap((c) => c.removed));
-      console.log("> got modified", commits.flatMap((c) => c.modified));
+      const json: webhookPayload = await request.json();
+      const repoName = json.repository.full_name;
+      const added = json.commits.flatMap((c) => c.added);
+      const removed = json.commits.flatMap((c) => c.removed);
+      const modified = json.commits.flatMap((c) => c.modified);
 
-      /* SPARQL A LA (note the .ttl and domains) `
-      LOAD <https://plazi.github.io/treatments-rdf/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91.ttl> INTO GRAPH <https://raw.githubusercontent.com/plazi/treatments-rdf/main/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91>
-      ` */
+      console.log("· got webhook from", repoName);
+      if (repoName !== config.repository) {
+        throw new Error("Wrong Repository");
+      }
+
+      console.log("> got added   ", added);
+      console.log("> got removed ", removed);
+      console.log("> got modified", modified);
 
       return new Response("yes", { status: 200 });
     } catch (error) {
