@@ -62,9 +62,13 @@ const webhookHandler = async (request: Request) => {
         try {
           console.debug("» handling", fileName);
           console.debug(statement);
-          await fetch(config.uploadUri, { method: "POST", body: statement });
-          succeededOnce = true;
-          console.debug("» success");
+          const response = await fetch(config.uploadUri, { method: "POST", body: statement });
+          if (response.ok) {
+            succeededOnce = true;
+            console.debug("» success");
+          } else {
+            throw new Error(`Got ${response.status}:\n` + await response.text());
+          }
         } catch (error) {
           failingFiles.push(fileName);
           console.group("» error:");
