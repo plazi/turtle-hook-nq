@@ -19,7 +19,7 @@ const fileUri = (fileName: string) =>
 const graphUri = (fileName: string) =>
   `<${config.graphUriPrefix}/${fileName.replace(/\.ttl$/, "")}>`;
 
-const DROP = (fileName: string) => `DROP ${graphUri(fileName)}`;
+const DROP = (fileName: string) => `DROP GRAPH ${graphUri(fileName)}`;
 
 /* SPARQL A LA (note the .ttl and domains) `
 LOAD <https://plazi.github.io/treatments-rdf/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91.ttl> INTO GRAPH <https://raw.githubusercontent.com/plazi/treatments-rdf/main/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91>
