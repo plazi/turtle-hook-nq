@@ -212,3 +212,4 @@ const response = await fetch("http://localhost:4505", {
 });
 
 console.log(response);
+console.log(await response.text());
