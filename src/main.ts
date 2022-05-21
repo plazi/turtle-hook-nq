@@ -90,7 +90,7 @@ const webhookHandler = async (request: Request) => {
           status: 200,
         });
       } else {
-        return new Response("", { status: 204 });
+        return new Response(undefined, { status: 204 });
       }
     } catch (error) {
       return new Response(error, {
