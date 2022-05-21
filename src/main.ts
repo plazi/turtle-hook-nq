@@ -13,6 +13,37 @@ type webhookPayload = {
   }[];
 };
 
+const emptyDatadir = async () => {
+  await Deno.remove("data", { recursive: true });
+};
+const cloneRepo = async () => {
+  const p = Deno.run({
+    cmd: [
+      "git",
+      "clone",
+      "https://github.com/plazi/treatments-rdf.git",
+      "data",
+    ],
+    cwd: "data",
+  });
+  const status = await p.status();
+  if (status.success) {
+    throw new Error("Bad, really bad");
+  }
+};
+
+const updateLocalData = async () => {
+  const p = Deno.run({
+    cmd: ["git", "pull"],
+    cwd: "data",
+  });
+  const status = await p.status();
+  if (status.success) {
+    await emptyDatadir();
+    await cloneRepo();
+  }
+};
+
 const fileUri = (fileName: string) =>
   `<${config.repositoryWebUri}/${fileName}>`;
 
@@ -39,7 +70,8 @@ const webhookHandler = async (request: Request) => {
       if (repoName !== config.repository) {
         throw new Error("Wrong Repository");
       }
-
+      // TODO re-add
+      // await updateLocalData();
       // TODO use Sets?
       const added = json.commits.flatMap((c) => c.added);
       const removed = json.commits.flatMap((c) => c.removed);
@@ -54,6 +86,11 @@ const webhookHandler = async (request: Request) => {
         ...removed.map((f) => ({ statement: DROP(f), fileName: f })),
         ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
       ];
+
+      // TODO remove
+      console.debug("^ Waiting 15 mins");
+      await new Promise<void>((r) => setTimeout(r, 900_000));
+      console.debug("^ Waited 15 mins");
 
       const failingFiles: string[] = [];
       let succeededOnce = false;
