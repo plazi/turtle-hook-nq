@@ -74,9 +74,11 @@ const webhookHandler = async (request: Request) => {
       }
 
       if (!succeededOnce) {
-        throw new Error(`All failed:\n ${failingFiles.join('\n ')}`)
+        throw new Error(`All failed:\n ${failingFiles.join("\n ")}`);
       } else if (failingFiles.length > 0) {
-        return new Response(`Some failed:\n ${failingFiles.join('\n ')}`, { status: 200 });
+        return new Response(`Some failed:\n ${failingFiles.join("\n ")}`, {
+          status: 200,
+        });
       } else {
         return new Response("", { status: 204 });
       }
