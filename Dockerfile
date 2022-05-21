@@ -5,7 +5,7 @@ RUN apt-get update
 RUN apt-get install -y git
 
 # The port that your application listens to.
-EXPOSE 80
+EXPOSE 4505
 
 WORKDIR /app
 
@@ -23,4 +23,4 @@ ADD config config
 # Compile the main app so that it doesn't need to be compiled each startup/entry.
 RUN deno cache src/main.ts
 
-CMD ["run", "--allow-net", "--allow-read", "--allow-run=git", "main.ts"]
+CMD ["run", "--allow-net", "--allow-read", "--allow-run=git", "src/main.ts"]
