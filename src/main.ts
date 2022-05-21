@@ -17,34 +17,69 @@ const fileUri = (fileName: string) =>
   `<${config.repositoryWebUri}/${fileName}>`;
 
 const graphUri = (fileName: string) =>
-  `<${config.graphUriPrefix}/${fileName.replace(/\.ttl$/, "")}`;
+  `<${config.graphUriPrefix}/${fileName.replace(/\.ttl$/, "")}>`;
+
+const DROP = (fileName: string) => `DROP ${graphUri(fileName)}`;
 
 /* SPARQL A LA (note the .ttl and domains) `
 LOAD <https://plazi.github.io/treatments-rdf/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91.ttl> INTO GRAPH <https://raw.githubusercontent.com/plazi/treatments-rdf/main/data/A8/2F/87/A82F87957F0CFFFFFF3E5EE3FB54FE91>
 ` */
-const loadQuery = (fileName: string) =>
-  `DROP ${graphUri(fileName)};
-  LOAD ${fileUri(fileName)} INTO GRAPH ${graphUri(fileName)}`;
+const LOAD = (fileName: string) =>
+  `LOAD ${fileUri(fileName)} INTO GRAPH ${graphUri(fileName)}`;
+
+const UPDATE = (fileName: string) => `${DROP(fileName)}; ${LOAD(fileName)}`;
 
 const webhookHandler = async (request: Request) => {
   if (request.method === "POST") {
     try {
       const json: webhookPayload = await request.json();
       const repoName = json.repository.full_name;
-      const added = json.commits.flatMap((c) => c.added);
-      const removed = json.commits.flatMap((c) => c.removed);
-      const modified = json.commits.flatMap((c) => c.modified);
 
       console.log("· got webhook from", repoName);
       if (repoName !== config.repository) {
         throw new Error("Wrong Repository");
       }
 
-      console.log("> got added   ", added);
-      console.log("> got removed ", removed);
-      console.log("> got modified", modified);
+      // TODO use Sets?
+      const added = json.commits.flatMap((c) => c.added);
+      const removed = json.commits.flatMap((c) => c.removed);
+      const modified = json.commits.flatMap((c) => c.modified);
 
-      return new Response("yes", { status: 200 });
+      console.info("> got added   ", added); // -> LOAD
+      console.info("> got removed ", removed); // -> DROP graphname
+      console.info("> got modified", modified); // DROP; LOAD
+
+      const statements = [
+        ...added.map((f) => ({ statement: LOAD(f), fileName: f })),
+        ...removed.map((f) => ({ statement: DROP(f), fileName: f })),
+        ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
+      ];
+
+      const failingFiles: string[] = [];
+      let succeededOnce = false;
+
+      for (const { statement, fileName } of statements) {
+        try {
+          console.debug("» handling", fileName);
+          console.debug(statement);
+          await fetch(config.uploadUri, { method: "POST", body: statement });
+          succeededOnce = true;
+          console.debug("» success");
+        } catch (error) {
+          failingFiles.push(fileName);
+          console.group("» error:");
+          console.warn(error);
+          console.groupEnd();
+        }
+      }
+
+      if (!succeededOnce) {
+        throw new Error(`All failed:\n ${failingFiles.join('\n ')}`)
+      } else if (failingFiles.length > 0) {
+        return new Response(`Some failed:\n ${failingFiles.join('\n ')}`, { status: 200 });
+      } else {
+        return new Response("", { status: 204 });
+      }
     } catch (error) {
       return new Response(error, {
         status: Status.InternalServerError,

@@ -18,9 +18,9 @@ COPY src/deps.ts .
 RUN deno cache deps.ts
 
 # These steps will be re-run upon each file change in your working directory:
-ADD src .
-ADD config /config
+ADD src src
+ADD config config
 # Compile the main app so that it doesn't need to be compiled each startup/entry.
-RUN deno cache main.ts
+RUN deno cache src/main.ts
 
 CMD ["run", "--allow-net", "--allow-read", "--allow-run=git", "main.ts"]
