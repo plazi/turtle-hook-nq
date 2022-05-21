@@ -13,7 +13,10 @@
   "settings": {},
 
   // Add the IDs of extensions you want installed when the container is created.
-  "extensions": [],
+  "extensions": [
+    "denoland.vscode-deno"
+  ],
+
   "portsAttributes": {
     "80": {
       "label": "8000"
