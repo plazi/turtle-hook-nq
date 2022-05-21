@@ -62,12 +62,18 @@ const webhookHandler = async (request: Request) => {
         try {
           console.debug("» handling", fileName);
           console.debug(statement);
-          const response = await fetch(config.uploadUri, { method: "POST", body: statement });
+          const response = await fetch(config.uploadUri, {
+            method: "POST",
+            body: statement,
+            headers: { "Content-Type": "application/sparql-update" },
+          });
           if (response.ok) {
             succeededOnce = true;
             console.debug("» success");
           } else {
-            throw new Error(`Got ${response.status}:\n` + await response.text());
+            throw new Error(
+              `Got ${response.status}:\n` + await response.text(),
+            );
           }
         } catch (error) {
           failingFiles.push(fileName);
