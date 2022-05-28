@@ -94,7 +94,7 @@ const webhookHandler = async (request: Request) => {
         ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
       ];
 
-      console.log("- statement count:", statements.length)
+      console.log("- statement count:", statements.length);
 
       const failingFiles: string[] = [];
       let succeededOnce = false;
@@ -124,7 +124,7 @@ const webhookHandler = async (request: Request) => {
         }
       }
 
-      console.log("< done")
+      console.log("< done");
       if (!succeededOnce) {
         throw new Error(`All failed:\n ${failingFiles.join("\n ")}`);
       } else if (failingFiles.length > 0) {
@@ -141,11 +141,15 @@ const webhookHandler = async (request: Request) => {
       });
     }
   } else if (pathname.startsWith("/repo")) {
-    return serveDir(request, {
+    console.log("· Got file request for", pathname);
+    const response = await serveDir(request, {
       fsRoot: "workdir/repo",
       urlRoot: "repo",
     });
+    response.headers.set("Content-Type", "text/turtle");
+    return response;
   } else {
+    console.log("· Got invalid request");
     return new Response(STATUS_TEXT.get(Status.MethodNotAllowed), {
       status: Status.MethodNotAllowed,
       statusText: STATUS_TEXT.get(Status.MethodNotAllowed),
