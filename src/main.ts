@@ -31,7 +31,7 @@ const cloneRepo = async () => {
     cwd: "workdir",
   });
   const status = await p.status();
-  if (status.success) {
+  if (!status.success) {
     throw new Error("Bad, really bad");
   }
 };
