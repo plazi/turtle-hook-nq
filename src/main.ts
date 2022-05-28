@@ -25,7 +25,7 @@ const cloneRepo = async () => {
       "clone",
       "--depth",
       "1",
-      "https://github.com/plazi/treatments-rdf.git",
+      config.repositoryUri,
       "repo",
     ],
     cwd: "workdir",
@@ -94,12 +94,14 @@ const webhookHandler = async (request: Request) => {
         ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
       ];
 
+      console.log("- statement count:", statements.length)
+
       const failingFiles: string[] = [];
       let succeededOnce = false;
 
       for (const { statement, fileName } of statements) {
+        console.debug("» handling", fileName);
         try {
-          console.debug("» handling", fileName);
           console.debug(statement);
           const response = await fetch(config.uploadUri, {
             method: "POST",
@@ -122,6 +124,7 @@ const webhookHandler = async (request: Request) => {
         }
       }
 
+      console.log("< done")
       if (!succeededOnce) {
         throw new Error(`All failed:\n ${failingFiles.join("\n ")}`);
       } else if (failingFiles.length > 0) {
@@ -155,6 +158,6 @@ await updateLocalData();
 
 const server = new Server({ handler: webhookHandler });
 const listener = Deno.listen({ port: 4505 });
-console.log("server listening on http://localhost:4505");
+console.log(`server listening on http://${Deno.env.get("HOSTNAME")}:4505`);
 
 await server.serve(listener);
