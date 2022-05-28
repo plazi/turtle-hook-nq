@@ -15,7 +15,7 @@
         "run",
         "--v8-flags=--max-old-space-size=8000",
         "--inspect",
-        "--allow-all"
+        "--allow-net", "--allow-read", "--allow-write", "--allow-run=git", "--allow-env"
       ],
       "attachSimplePort": 9229
     }
