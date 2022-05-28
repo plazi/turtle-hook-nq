@@ -1,4 +1,4 @@
-import { Server, Status, STATUS_TEXT } from "./deps.ts";
+import { serveDir, Server, Status, STATUS_TEXT } from "./deps.ts";
 import { config } from "../config/config.ts";
 
 // Incomplete, only what we need
@@ -14,17 +14,21 @@ type webhookPayload = {
 };
 
 const emptyDatadir = async () => {
-  await Deno.remove("data", { recursive: true });
+  await Deno.remove("workdir/repo", { recursive: true });
 };
+
 const cloneRepo = async () => {
+  console.warn("cloning repo (this WILL take some time)");
   const p = Deno.run({
     cmd: [
       "git",
       "clone",
+      "--depth",
+      "1",
       "https://github.com/plazi/treatments-rdf.git",
-      "data",
+      "repo",
     ],
-    cwd: "data",
+    cwd: "workdir",
   });
   const status = await p.status();
   if (status.success) {
@@ -33,19 +37,23 @@ const cloneRepo = async () => {
 };
 
 const updateLocalData = async () => {
+  await Deno.mkdir("workdir/repo/.git", { recursive: true });
   const p = Deno.run({
     cmd: ["git", "pull"],
-    cwd: "data",
+    env: {
+      GIT_CEILING_DIRECTORIES: Deno.cwd(),
+    },
+    cwd: "workdir/repo",
   });
   const status = await p.status();
-  if (status.success) {
+  if (!status.success) {
     await emptyDatadir();
     await cloneRepo();
   }
 };
 
 const fileUri = (fileName: string) =>
-  `<${config.repositoryWebUri}/${fileName}>`;
+  `<http://${Deno.env.get("HOSTNAME")}:4505/repo/${fileName}>`;
 
 const graphUri = (fileName: string) =>
   `<${config.graphUriPrefix}/${fileName.replace(/\.ttl$/, "")}>`;
@@ -61,6 +69,7 @@ const LOAD = (fileName: string) =>
 const UPDATE = (fileName: string) => `${DROP(fileName)}; ${LOAD(fileName)}`;
 
 const webhookHandler = async (request: Request) => {
+  const pathname = new URL(request.url).pathname;
   if (request.method === "POST") {
     try {
       const json: webhookPayload = await request.json();
@@ -70,9 +79,7 @@ const webhookHandler = async (request: Request) => {
       if (repoName !== config.repository) {
         throw new Error("Wrong Repository");
       }
-      // TODO re-add
-      // await updateLocalData();
-      // TODO use Sets?
+      await updateLocalData();
       const added = json.commits.flatMap((c) => c.added);
       const removed = json.commits.flatMap((c) => c.removed);
       const modified = json.commits.flatMap((c) => c.modified);
@@ -86,11 +93,6 @@ const webhookHandler = async (request: Request) => {
         ...removed.map((f) => ({ statement: DROP(f), fileName: f })),
         ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
       ];
-
-      // TODO remove
-      console.debug("^ Waiting 15 mins");
-      await new Promise<void>((r) => setTimeout(r, 900_000));
-      console.debug("^ Waited 15 mins");
 
       const failingFiles: string[] = [];
       let succeededOnce = false;
@@ -135,6 +137,11 @@ const webhookHandler = async (request: Request) => {
         statusText: STATUS_TEXT.get(Status.InternalServerError),
       });
     }
+  } else if (pathname.startsWith("/repo")) {
+    return serveDir(request, {
+      fsRoot: "workdir/repo",
+      urlRoot: "repo",
+    });
   } else {
     return new Response(STATUS_TEXT.get(Status.MethodNotAllowed), {
       status: Status.MethodNotAllowed,
@@ -143,9 +150,11 @@ const webhookHandler = async (request: Request) => {
   }
 };
 
+console.log("updating local data...");
+await updateLocalData();
+
 const server = new Server({ handler: webhookHandler });
 const listener = Deno.listen({ port: 4505 });
-
 console.log("server listening on http://localhost:4505");
 
 await server.serve(listener);
