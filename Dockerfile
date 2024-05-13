@@ -1,8 +1,8 @@
-FROM denoland/deno:ubuntu-1.22.1
+FROM denoland/deno:1.43.3
 
 # Install cron
-RUN apt-get update
-RUN apt-get install -y git
+RUN DEBIAN_FRONTEND=noninteractive apt-get update
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y git
 
 # The port that your application listens to.
 EXPOSE 4505
