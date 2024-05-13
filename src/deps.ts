@@ -3,4 +3,4 @@ export {
   GHActServer,
   GHActWorker,
   type Job,
-} from "https://deno.land/x/ghact@1.1.0/mod.ts";
+} from "https://deno.land/x/ghact@1.1.1/mod.ts";
