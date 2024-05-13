@@ -7,7 +7,7 @@ export const sparqlConfig = {
 
 export const ghActConfig: Config = {
   title: "Turle-Hook",
-  description: "Load RDF fron plazi/treatments-rdf into out triple-store.",
+  description: "Load RDF from plazi/treatments-rdf into our triple-store.",
   // we don't create commits, so a default job-author is not really neccesary
   email: "",
   sourceRepositoryUri: "https://github.com/plazi/treatments-rdf.git",
