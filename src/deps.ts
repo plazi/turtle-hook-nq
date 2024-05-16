@@ -3,4 +3,6 @@ export {
   GHActServer,
   GHActWorker,
   type Job,
-} from "https://deno.land/x/ghact@1.1.1/mod.ts";
+} from "https://raw.githubusercontent.com/factsmission/ghact/faster-git/mod.ts";
+// TODO revert to deno.land after relevant version is published
+

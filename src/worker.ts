@@ -22,7 +22,9 @@ const _worker = new GHActWorker(
   ghActConfig,
   async (job: Job, log): Promise<void> => {
     try {
-      log("Starting transformation\n" + JSON.stringify(job, undefined, 2));
+      await log(
+        "Starting transformation\n" + JSON.stringify(job, undefined, 2),
+      );
 
       let added: string[] = [];
       let modified: string[] = [];
@@ -32,7 +34,7 @@ const _worker = new GHActWorker(
         modified = job.files.modified || [];
         removed = job.files.removed || [];
       } else if (job.from) {
-        const files = _worker.gitRepository.getModifiedAfter(
+        const files = await _worker.gitRepository.getModifiedAfter(
           job.from,
           job.till,
           log,
@@ -49,9 +51,9 @@ const _worker = new GHActWorker(
         );
       }
 
-      log(`> got added    ${added}`); // -> LOAD
-      log(`> got removed  ${removed}`); // -> DROP graphname
-      log(`> got modified ${modified}`); // DROP; LOAD
+      await log(`> got added    ${added}`); // -> LOAD
+      await log(`> got removed  ${removed}`); // -> DROP graphname
+      await log(`> got modified ${modified}`); // DROP; LOAD
 
       const statements = [
         ...added.map((f) => ({ statement: LOAD(f), fileName: f })),
@@ -59,15 +61,14 @@ const _worker = new GHActWorker(
         ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
       ];
 
-      log(`- statement count: ${statements.length}`);
+      await log(`- statement count: ${statements.length}`);
 
       const failingFiles: string[] = [];
       let succeededOnce = false;
 
       for (const { statement, fileName } of statements) {
-        log("» handling " + fileName);
+        await log(`» handling ${fileName}\n  ${statement}`);
         try {
-          log(statement);
           const response = await fetch(sparqlConfig.uploadUri, {
             method: "POST",
             body: statement,
@@ -75,7 +76,7 @@ const _worker = new GHActWorker(
           });
           if (response.ok) {
             succeededOnce = true;
-            log("» success");
+            await log("» success");
           } else {
             throw new Error(
               `Got ${response.status}:\n` + await response.text(),
@@ -83,24 +84,23 @@ const _worker = new GHActWorker(
           }
         } catch (error) {
           failingFiles.push(fileName);
-          console.group("» error:");
-          console.warn(error);
-          console.groupEnd();
+          await log(" » error:");
+          await log("" + error);
         }
       }
 
-      console.log("< done");
+      await log("< done");
       if (!succeededOnce) {
         throw new Error(`All failed:\n ${failingFiles.join("\n ")}`);
       } else if (failingFiles.length > 0) {
-        log(`Some failed:\n ${failingFiles.join("\n ")}`);
+        await log(`Some failed:\n ${failingFiles.join("\n ")}`);
       } else {
-        log("All succeeded");
+        await log("All succeeded");
       }
     } catch (error) {
-      log("FAILED TRANSFORMATION");
-      log(error);
-      if (error.stack) log(error.stack);
+      await log("FAILED TRANSFORMATION");
+      await log("" + error);
+      if (error.stack) await log("" + error.stack);
       throw error;
     }
   },
