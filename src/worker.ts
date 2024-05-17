@@ -21,7 +21,7 @@ const _worker = new GHActWorker(
   self,
   ghActConfig,
   async (job: Job, log): Promise<void> => {
-    await log(
+    log(
       "Starting transformation\n" + JSON.stringify(job, undefined, 2),
     );
 
@@ -51,9 +51,9 @@ const _worker = new GHActWorker(
       );
     }
 
-    await log(`> got added    ${added}`); // -> LOAD
-    await log(`> got removed  ${removed}`); // -> DROP graphname
-    await log(`> got modified ${modified}`); // DROP; LOAD
+    log(`> got added    ${added}`); // -> LOAD
+    log(`> got removed  ${removed}`); // -> DROP graphname
+    log(`> got modified ${modified}`); // DROP; LOAD
 
     const statements = [
       ...added.map((f) => ({ statement: LOAD(f), fileName: f })),
@@ -61,13 +61,13 @@ const _worker = new GHActWorker(
       ...modified.map((f) => ({ statement: UPDATE(f), fileName: f })),
     ];
 
-    await log(`- statement count: ${statements.length}`);
+    log(`- statement count: ${statements.length}`);
 
     const failingFiles: string[] = [];
     let succeededOnce = false;
 
     for (const { statement, fileName } of statements) {
-      await log(`» handling ${fileName}\n  ${statement}`);
+      log(`» handling ${fileName}\n  ${statement}`);
       try {
         const response = await fetch(sparqlConfig.uploadUri, {
           method: "POST",
@@ -76,7 +76,7 @@ const _worker = new GHActWorker(
         });
         if (response.ok) {
           succeededOnce = true;
-          await log("» success");
+          log("» success");
         } else {
           throw new Error(
             `Got ${response.status}:\n` + await response.text(),
@@ -84,19 +84,19 @@ const _worker = new GHActWorker(
         }
       } catch (error) {
         failingFiles.push(fileName);
-        await log(" » error:");
-        await log("" + error);
+        log(" » error:");
+        log("" + error);
       }
     }
 
-    await log("< done");
+    log("< done");
     if (!succeededOnce) {
-      await log(`All failed:\n ${failingFiles.join("\n ")}`);
+      log(`All failed:\n ${failingFiles.join("\n ")}`);
       throw new Error(`All failed`);
     } else if (failingFiles.length > 0) {
-      await log(`Some failed:\n ${failingFiles.join("\n ")}`);
+      log(`Some failed:\n ${failingFiles.join("\n ")}`);
     } else {
-      await log("All succeeded");
+      log("All succeeded");
     }
   },
 );
