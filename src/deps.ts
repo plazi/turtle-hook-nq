@@ -1,6 +1,6 @@
 export {
-  Server,
-  Status,
-  STATUS_TEXT,
-} from "https://deno.land/std@0.141.0/http/mod.ts";
-export { serveDir } from "https://deno.land/std@0.141.0/http/file_server.ts";
+  type Config,
+  GHActServer,
+  GHActWorker,
+  type Job,
+} from "https://deno.land/x/ghact@1.2.1/mod.ts";

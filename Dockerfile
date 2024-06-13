@@ -1,8 +1,8 @@
-FROM denoland/deno:ubuntu-1.22.1
+FROM denoland/deno:1.43.3
 
 # Install cron
-RUN apt-get update
-RUN apt-get install -y git
+RUN DEBIAN_FRONTEND=noninteractive apt-get update
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y git
 
 # The port that your application listens to.
 EXPOSE 4505
@@ -14,8 +14,8 @@ WORKDIR /app
 
 # Cache the dependencies as a layer (the following two steps are re-run only when deps.ts is modified).
 # Ideally cache deps.ts will download and compile _all_ external files used in main.ts.
-COPY src/deps.ts .
-RUN deno cache deps.ts
+COPY src/deps.ts src/deps.ts
+RUN deno cache src/deps.ts
 
 # These steps will be re-run upon each file change in your working directory:
 ADD src src
