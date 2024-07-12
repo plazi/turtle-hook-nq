@@ -42,14 +42,17 @@ const _worker = new GHActWorker(
       added = files.added;
       modified = files.modified;
       removed = files.removed;
-      if (files.till && files.till !== "HEAD") {
-        job.till = files.till;
-      }
+      job.from = files.from;
+      job.till = files.till;
     } else {
       throw new Error(
         "Could not start job, neither explicit file list nor from-commit specified",
       );
     }
+
+    added = added.filter((f) => f.endsWith(".ttl"));
+    removed = removed.filter((f) => f.endsWith(".ttl"));
+    modified = modified.filter((f) => f.endsWith(".ttl"));
 
     log(`> got added    ${added}`); // -> LOAD
     log(`> got removed  ${removed}`); // -> DROP graphname
