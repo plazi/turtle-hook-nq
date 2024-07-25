@@ -5,7 +5,9 @@ const fileUri = (fileName: string) =>
   `<http://${Deno.env.get("HOSTNAME")}:4505/workdir/repository/${fileName}>`;
 
 const graphUri = (fileName: string) =>
-  `<${sparqlConfig.graphUriPrefix}/${fileName.replace(/\.ttl$/, "")}>`;
+  `<${sparqlConfig.graphUriPrefix}/${
+    fileName.replace(/.*\//, "").replace(/\.ttl$/, "")
+  }>`;
 
 const DROP = (fileName: string) => `DROP GRAPH ${graphUri(fileName)}`;
 

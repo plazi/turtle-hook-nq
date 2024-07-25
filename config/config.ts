@@ -2,7 +2,7 @@ import { type Config } from "../src/deps.ts";
 
 export const sparqlConfig = {
   // do not change this prefix, removing the previous version depends on this not changing
-  graphUriPrefix: "https://raw.githubusercontent.com/plazi/treatments-rdf/main",
+  graphUriPrefix: "https://treatment.plazi.org/id",
   uploadUri: "http://blazegraph:8080/blazegraph/sparql",
 };
 
