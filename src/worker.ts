@@ -99,9 +99,8 @@ const _worker = new GHActWorker(
       log(`All failed:\n ${failingFiles.join("\n ")}`);
       throw new Error(`All failed`);
     } else if (failingFiles.length > 0) {
-      const message = `Some failed:\n ${failingFiles.join("\n ")}`;
-      log(message);
-      return message;
+      log(`Some failed:\n ${failingFiles.join("\n ")}`);
+      return `Some failed: ${failingFiles.length} of ${statements.length} failed`;
     } else {
       log("All succeeded");
       return "";
