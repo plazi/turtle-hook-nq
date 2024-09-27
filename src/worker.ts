@@ -22,7 +22,7 @@ const UPDATE = (fileName: string) => `${DROP(fileName)}; ${LOAD(fileName)}`;
 const _worker = new GHActWorker(
   self,
   ghActConfig,
-  async (job: Job, log): Promise<void> => {
+  async (job: Job, log): Promise<string> => {
     log(
       "Starting transformation\n" + JSON.stringify(job, undefined, 2),
     );
@@ -99,9 +99,12 @@ const _worker = new GHActWorker(
       log(`All failed:\n ${failingFiles.join("\n ")}`);
       throw new Error(`All failed`);
     } else if (failingFiles.length > 0) {
-      log(`Some failed:\n ${failingFiles.join("\n ")}`);
+      const message = `Some failed:\n ${failingFiles.join("\n ")}`;
+      log(message);
+      return message;
     } else {
       log("All succeeded");
+      return "";
     }
   },
 );
