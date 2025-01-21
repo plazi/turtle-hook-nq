@@ -1,8 +1,8 @@
-FROM denoland/deno:1.43.3
+FROM denoland/deno:2.1.6
 
 # Install cron
 RUN DEBIAN_FRONTEND=noninteractive apt-get update
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y git
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y git raptor2-utils
 
 # The port that your application listens to.
 EXPOSE 4505
