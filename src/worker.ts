@@ -3,7 +3,7 @@ import { ghActConfig, nqConfig } from "../config/config.ts";
 import { existsSync } from "https://deno.land/x/ghact@1.2.6/src/deps.ts";
 
 
-const _graphUri = (fileName: string) =>
+const graphUri = (fileName: string) =>
   `<${nqConfig.graphUriPrefix}/${
     fileName.replace(/.*\//, "").replace(/\.ttl$/, "")
   }>`;
@@ -48,10 +48,15 @@ const _worker = new GHActWorker(
     removed = removed.filter((f) => f.endsWith(".ttl"));
     modified = modified.filter((f) => f.endsWith(".ttl"));
 
-    log(`> got added    ${added}`); // -> LOAD
+    log(`> got added  
+        ${added}`); // -> LOAD
     log(`> got removed  ${removed}`); // -> DROP graphname
     log(`> got modified ${modified}`); // DROP; LOAD
-    for (const file of modified) {
+    // modified implemented as removed and added
+    removed.push(...modified)
+    added.push(...modified)
+    
+    for (const file of added) {
       const fullFile = `${_worker.gitRepository.directory}/${file}`;
       if (
         file.endsWith(".ttl") &&
@@ -70,7 +75,7 @@ const _worker = new GHActWorker(
             stdout: "piped",
           });
           const child = command.spawn();
-          child.stdout.pipeTo(
+          child.stdout.pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`)).pipeTo(
             Deno.openSync(nqConfig.outputFile, { write: true, create: true, append: true})
               .writable,
           );
@@ -101,3 +106,33 @@ const _worker = new GHActWorker(
     }
   },
 );
+
+function replacePeriodAtEnd(s: string) {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let leftover = "";
+
+  return new TransformStream({
+      transform(chunk, controller) {
+          // Decode the chunk and prepend leftover from previous call
+          const text : string = leftover + decoder.decode(chunk, { stream: true }) as string;
+
+          // Split into lines, keeping the last part as a possible leftover
+          const lines: string[] = text.split(/\r?\n/);
+          leftover = lines.pop() || ""; // Save the last (possibly incomplete) line
+
+          for (let line of lines) {
+              // Replace period at end of the line with 's'
+              line = line.replace(/\.$/, s);
+              controller.enqueue(encoder.encode(line + "\n"));
+          }
+      },
+      flush(controller) {
+          if (leftover) {
+              // Replace period at end of last line if it exists
+              leftover = leftover.replace(/\.$/, s);
+              controller.enqueue(encoder.encode(leftover));
+          }
+      }
+  });
+}
