@@ -34,5 +34,5 @@ export default async function removeQuads(
   inputFileHandle.close();
   outputFileHandle.close();
   await Deno.rename(outputFile, nqFile);
-  console.log("Filtered file created successfully.");
+  console.log("Successfully removed graphs from file.");
 }
