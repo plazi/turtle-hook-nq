@@ -1,6 +1,7 @@
 import { GHActWorker, type Job } from "./deps.ts";
 import { ghActConfig, nqConfig } from "../config/config.ts";
 import { existsSync } from "https://deno.land/x/ghact@1.2.6/src/deps.ts";
+import removeQuads from "./removeQuads.ts";
 
 
 const graphUri = (fileName: string) =>
@@ -55,7 +56,9 @@ const _worker = new GHActWorker(
     // modified implemented as removed and added
     removed.push(...modified)
     added.push(...modified)
-    
+    if (existsSync(nqConfig.outputFile)) {
+      removeQuads(nqConfig.outputFile, ...removed.map(file => graphUri(file))
+    }
     for (const file of added) {
       const fullFile = `${_worker.gitRepository.directory}/${file}`;
       if (
@@ -67,7 +70,7 @@ const _worker = new GHActWorker(
             args: [
               "-i",
               "turtle",
-              fullFile,
+              fullFile,graphUri(file)
               "-o",
               "nquads",
             ],
@@ -75,7 +78,7 @@ const _worker = new GHActWorker(
             stdout: "piped",
           });
           const child = command.spawn();
-          child.stdout.pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`)).pipeTo(
+          child.stdout.pipeThrough(replacePeriodAtEnd(` ${} .`)).pipeTo(
             Deno.openSync(nqConfig.outputFile, { write: true, create: true, append: true})
               .writable,
           );

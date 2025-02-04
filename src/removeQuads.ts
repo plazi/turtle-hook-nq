@@ -5,15 +5,15 @@ const inputFile = "large.nq"; // Change to your actual file path
 const outputFile = "filtered.nq";
 
 export default async function removeQuads(
-  inputFile: string,
-  outputFile: string,
+  nqFile: string,
   ...exclude: string[]
 ) {
+  Deno.makeTempFileSync({prefix: "quads"})
   // List of graph names to exclude
   const excludedGraphs = new Set(exclude);
 
   // Open files for reading and writing
-  const inputFileHandle = await Deno.open(inputFile, { read: true });
+  const inputFileHandle = await Deno.open(nqFile, { read: true });
   const outputFileHandle = await Deno.create(outputFile);
   const writer = outputFileHandle.writable.getWriter();
 
@@ -33,6 +33,6 @@ export default async function removeQuads(
   writer.close();
   inputFileHandle.close();
   outputFileHandle.close();
-
+  await Deno.rename(outputFile, nqFile);
   console.log("Filtered file created successfully.");
 }
