@@ -57,7 +57,7 @@ const _worker = new GHActWorker(
     removed.push(...modified)
     added.push(...modified)
     if (existsSync(nqConfig.outputFile)) {
-      removeQuads(nqConfig.outputFile, ...removed.map(file => graphUri(file))
+      await removeQuads(nqConfig.outputFile, ...removed.map(file => graphUri(file)));
     }
     for (const file of added) {
       const fullFile = `${_worker.gitRepository.directory}/${file}`;
@@ -70,7 +70,7 @@ const _worker = new GHActWorker(
             args: [
               "-i",
               "turtle",
-              fullFile,graphUri(file)
+              fullFile,
               "-o",
               "nquads",
             ],
@@ -78,7 +78,7 @@ const _worker = new GHActWorker(
             stdout: "piped",
           });
           const child = command.spawn();
-          child.stdout.pipeThrough(replacePeriodAtEnd(` ${} .`)).pipeTo(
+          child.stdout.pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`)).pipeTo(
             Deno.openSync(nqConfig.outputFile, { write: true, create: true, append: true})
               .writable,
           );

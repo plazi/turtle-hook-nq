@@ -1,14 +1,11 @@
 import { readLines } from "https://jsr.io/@std/io";
 
-// Set input and output file paths
-const inputFile = "large.nq"; // Change to your actual file path
-const outputFile = "filtered.nq";
 
 export default async function removeQuads(
   nqFile: string,
   ...exclude: string[]
 ) {
-  Deno.makeTempFileSync({prefix: "quads"})
+  const outputFile = Deno.makeTempFileSync({prefix: "quads"})
   // List of graph names to exclude
   const excludedGraphs = new Set(exclude);
 
