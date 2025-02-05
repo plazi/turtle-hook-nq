@@ -27,7 +27,7 @@ export default async function removeQuads(
   }
 
   // Clean up resources
-  writer.close();
+  await writer.close();
   inputFileHandle.close();
   outputFileHandle.close();
   await Deno.rename(outputFile, nqFile);

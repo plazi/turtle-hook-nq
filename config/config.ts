@@ -2,7 +2,7 @@ import { type Config } from "../src/deps.ts";
 
 export const nqConfig = {
   graphUriPrefix: "https://treatment.plazi.org/id",
-  outputFile: "plazi-treatments.nq",
+  outputFile: "/workdir/plazi-treatments.nq",
 };
 
 export const ghActConfig: Config = {

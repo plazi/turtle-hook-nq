@@ -49,10 +49,6 @@ const _worker = new GHActWorker(
     removed = removed.filter((f) => f.endsWith(".ttl"));
     modified = modified.filter((f) => f.endsWith(".ttl"));
 
-    log(`> got added  
-        ${added}`); // -> LOAD
-    log(`> got removed  ${removed}`); // -> DROP graphname
-    log(`> got modified ${modified}`); // DROP; LOAD
     // modified implemented as removed and added
     removed.push(...modified)
     added.push(...modified)
