@@ -27,7 +27,7 @@ export default async function removeQuads(nqFile: string, ...exclude: string[]) 
     // Clean up resources safely
     if (writer) await writer.close();
     if (inputFileHandle) inputFileHandle.close();
-    if (outputFileHandle) outputFileHandle.close();
+    // asume this is closed by eriter.close: if (outputFileHandle) outputFileHandle.close();
   }
 
   // Replace the original file with the filtered one
