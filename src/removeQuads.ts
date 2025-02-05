@@ -1,35 +1,36 @@
-import { readLines } from "jsr:@std/io@0.224.0";
+import { readLines } from "https://jsr.io/@std/io";
 
-
-export default async function removeQuads(
-  nqFile: string,
-  ...exclude: string[]
-) {
-  const outputFile = Deno.makeTempFileSync({prefix: "quads"})
-  // List of graph names to exclude
+export default async function removeQuads(nqFile: string, ...exclude: string[]) {
+  const outputFile = Deno.makeTempFileSync({ prefix: "quads" });
   const excludedGraphs = new Set(exclude);
 
-  // Open files for reading and writing
-  const inputFileHandle = await Deno.open(nqFile, { read: true });
-  const outputFileHandle = await Deno.create(outputFile);
-  const writer = outputFileHandle.writable.getWriter();
+  let inputFileHandle, outputFileHandle, writer;
 
-  // Process file line by line
-  for await (const line of readLines(inputFileHandle)) {
-    const parts = line.trim().split(" ");
-    if (parts.length < 4) continue; // Ignore malformed lines
+  try {
+    // Open files for reading and writing
+    inputFileHandle = await Deno.open(nqFile, { read: true });
+    outputFileHandle = await Deno.create(outputFile);
+    writer = outputFileHandle.writable.getWriter();
 
-    const graphName = parts.length === 4 ? null : parts[3]; // Graph name is the fourth element if present
+    // Process file line by line
+    for await (const line of readLines(inputFileHandle)) {
+      const parts = line.trim().split(" ");
+      if (parts.length < 4) continue; // Ignore malformed lines
 
-    if (!graphName || !excludedGraphs.has(graphName)) {
-      await writer.write(new TextEncoder().encode(line + "\n"));
+      const graphName = parts.length === 4 ? null : parts[3]; // Graph name is the fourth element if present
+
+      if (!graphName || !excludedGraphs.has(graphName)) {
+        await writer.write(new TextEncoder().encode(line + "\n"));
+      }
     }
+  } finally {
+    // Clean up resources safely
+    if (writer) await writer.close();
+    if (inputFileHandle) inputFileHandle.close();
+    if (outputFileHandle) outputFileHandle.close();
   }
 
-  // Clean up resources
-  await writer.close();
-  inputFileHandle.close();
-  outputFileHandle.close();
+  // Replace the original file with the filtered one
   await Deno.rename(outputFile, nqFile);
   console.log("Successfully removed graphs from file.");
 }
