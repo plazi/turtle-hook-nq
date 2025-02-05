@@ -1,17 +1,15 @@
 import { readLines } from "jsr:@std/io@0.224.0";
 
 export default async function removeQuads(nqFile: string, ...exclude: string[]) {
-  const outputFile = Deno.makeTempFileSync({ prefix: "quads" });
+  const outputFile = `${nqFile}-temp`;
   const excludedGraphs = new Set(exclude);
 
-  let inputFileHandle, outputFileHandle, writer;
+  // Open files
+  const inputFileHandle = await Deno.open(nqFile, { read: true });
+  const outputFileHandle = await Deno.create(outputFile);
+  const writer = outputFileHandle.writable.getWriter();
 
   try {
-    // Open files for reading and writing
-    inputFileHandle = await Deno.open(nqFile, { read: true });
-    outputFileHandle = await Deno.create(outputFile);
-    writer = outputFileHandle.writable.getWriter();
-
     // Process file line by line
     for await (const line of readLines(inputFileHandle)) {
       const parts = line.trim().split(" ");
@@ -23,14 +21,20 @@ export default async function removeQuads(nqFile: string, ...exclude: string[]) 
         await writer.write(new TextEncoder().encode(line + "\n"));
       }
     }
-  } finally {
-    // Clean up resources safely
-    if (writer) await writer.close();
-    if (inputFileHandle) inputFileHandle.close();
-    // asume this is closed by eriter.close: if (outputFileHandle) outputFileHandle.close();
-  }
 
-  // Replace the original file with the filtered one
-  await Deno.rename(outputFile, nqFile);
-  console.log("Successfully removed graphs from file.");
+    // Close the writer explicitly (this should also close outputFileHandle)
+    await writer.close();
+    inputFileHandle.close();
+
+    // Replace the original file
+    await Deno.remove(nqFile);
+    await Deno.rename(outputFile, nqFile);
+    console.log("Successfully removed graphs from file.");
+  } catch (error) {
+    console.error("Error processing file:", error);
+  } finally {
+    // Ensure cleanup
+    if (!writer.locked) writer.releaseLock();
+    if (!inputFileHandle.rid) inputFileHandle.close();
+  }
 }
