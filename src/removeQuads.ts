@@ -32,9 +32,5 @@ export default async function removeQuads(nqFile: string, ...exclude: string[]) 
     console.log("Successfully removed graphs from file.");
   } catch (error) {
     console.error("Error processing file:", error);
-  } finally {
-    // Ensure cleanup
-    if (!writer.locked) writer.releaseLock();
-    if (!inputFileHandle.rid) inputFileHandle.close();
   }
 }
