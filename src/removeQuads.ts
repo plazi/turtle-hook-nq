@@ -1,4 +1,4 @@
-import { readLines } from "https://jsr.io/@std/io";
+import { readLines } from "jsr:@std/io@0.224.0";
 
 export default async function removeQuads(nqFile: string, ...exclude: string[]) {
   const outputFile = Deno.makeTempFileSync({ prefix: "quads" });
