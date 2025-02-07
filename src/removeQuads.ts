@@ -1,5 +1,3 @@
-import { readLines } from "jsr:@std/io@0.224.0";
-
 export default async function removeQuads(nqFile: string, ...exclude: string[]) {
   const outputFile = `${nqFile}-temp`;
   const excludedGraphs = new Set(exclude);
@@ -10,21 +8,34 @@ export default async function removeQuads(nqFile: string, ...exclude: string[]) 
   const writer = outputFileHandle.writable.getWriter();
 
   try {
-    // Process file line by line
-    for await (const line of readLines(inputFileHandle)) {
-      const parts = line.trim().split(" ");
-      if (parts.length < 4) continue; // Ignore malformed lines
+    // Create a buffered reader
+    const decoder = new TextDecoder();
+    const buffer = new Uint8Array(1024);
+    let leftover = "";
 
-      const graphName = parts.length === 4 ? null : parts[3]; // Graph name is the fourth element if present
+    while (true) {
+      const bytesRead = await inputFileHandle.read(buffer);
+      if (bytesRead === null) break;
+      
+      const decoded = decoder.decode(buffer.subarray(0, bytesRead));
+      const lines = (leftover + decoded).split("\n");
+      leftover = lines.pop() ?? "";
 
-      if (!graphName || !excludedGraphs.has(graphName)) {
-        await writer.write(new TextEncoder().encode(line + "\n"));
+      for (const line of lines) {
+        const parts = line.trim().split(" ");
+        if (parts.length < 4) continue; // Ignore malformed lines
+
+        const graphName = parts.length === 4 ? null : parts[3]; // Graph name is the fourth element if present
+
+        if (!graphName || !excludedGraphs.has(graphName)) {
+          await writer.write(new TextEncoder().encode(line + "\n"));
+        }
       }
     }
 
     // Close the writer explicitly (this should also close outputFileHandle)
     await writer.close();
-    inputFileHandle.close();
+    await inputFileHandle.close();
 
     // Replace the original file
     await Deno.remove(nqFile);
@@ -32,5 +43,9 @@ export default async function removeQuads(nqFile: string, ...exclude: string[]) 
     console.log("Successfully removed graphs from file.");
   } catch (error) {
     console.error("Error processing file:", error);
+  } finally {
+    // Ensure cleanup
+    writer.releaseLock();
+    inputFileHandle.close();
   }
 }
