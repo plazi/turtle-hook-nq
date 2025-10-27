@@ -55,8 +55,8 @@ const _worker = new GHActWorker(
     const results = await Promise.all(
       added.map(async (file) => {
         const fullFile = `${_worker.gitRepository.directory}/${file}`;
-        if (!file.endsWith(".ttl") || !existsSync(fullFile)) {
-          return { file, success: true }; // Skip non-ttl or non-existent files
+        if (!existsSync(fullFile)) {
+          return { file, success: true }; // Skip non-existent files
         }
         
         try {
