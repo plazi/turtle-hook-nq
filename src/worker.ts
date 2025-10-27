@@ -21,9 +21,6 @@ const _worker = new GHActWorker(
     let modified: string[] = [];
     let removed: string[] = [];
 
-    const failingFiles: string[] = [];
-    let succeededOnce = false;
-
     if ("files" in job) {
       modified = job.files.modified ?? [];
       if ("added" in job.files) added = job.files.added;
@@ -55,42 +52,58 @@ const _worker = new GHActWorker(
     if (existsSync(nqConfig.outputFile)) {
       await removeQuads(nqConfig.outputFile, ...removed.map(file => graphUri(file)));
     }
-    for (const file of added) {
-      const fullFile = `${_worker.gitRepository.directory}/${file}`;
-      if (
-        file.endsWith(".ttl") &&
-        existsSync(fullFile)
-      ) {
+    const results = await Promise.all(
+      added.map(async (file) => {
+        const fullFile = `${_worker.gitRepository.directory}/${file}`;
+        if (!file.endsWith(".ttl") || !existsSync(fullFile)) {
+          return { file, success: true }; // Skip non-ttl or non-existent files
+        }
+        
         try {
           const command = new Deno.Command("rapper", {
-            args: [
-              "-i",
-              "turtle",
-              fullFile,
-              "-o",
-              "nquads",
-            ],
+            args: ["-i", "turtle", fullFile, "-o", "nquads"],
             stdin: "piped",
             stdout: "piped",
           });
           const child = command.spawn();
-          child.stdout.pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`)).pipeTo(
-            Deno.openSync(nqConfig.outputFile, { write: true, create: true, append: true})
-              .writable,
-          );
+          
+          // Use a temporary file per process to avoid conflicts
+          const tempFile = `${nqConfig.outputFile}.${file.replace(/\//g, '_')}.tmp`;
+          const outputFileHandle = await Deno.open(tempFile, { write: true, create: true, append: false });
+          
+          child.stdout
+            .pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`))
+            .pipeTo(outputFileHandle.writable);
+          
           child.stdin.close();
           const status = await child.status;
+          
           if (!status.success) {
+            await Deno.remove(tempFile).catch(() => {});
             throw new Error(`Status: ${status.code}`);
           }
-          succeededOnce = true;
+          
+          return { file, success: true, tempFile };
         } catch (error) {
-          failingFiles.push(file);
-          log(" » error:");
-          log("" + error);
+          log(` » error in ${file}: ${error}`);
+          return { file, success: false, error };
         }
+      })
+    );
+
+    // Merge temp files into main output file
+    const outputFileHandle = await Deno.open(nqConfig.outputFile, { write: true, create: true, append: true });
+    for (const result of results) {
+      if (result.success && result.tempFile) {
+        const tempContent = await Deno.readFile(result.tempFile);
+        await outputFileHandle.write(tempContent);
+        await Deno.remove(result.tempFile);
       }
     }
+    outputFileHandle.close();
+
+    const failingFiles = results.filter(r => !r.success).map(r => r.file);
+    const succeededOnce = results.some(r => r.success);
 
     log("< done");
     if (!succeededOnce) {
