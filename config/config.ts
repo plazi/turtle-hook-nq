@@ -2,7 +2,8 @@ import { type Config } from "../src/deps.ts";
 
 export const nqConfig = {
   graphUriPrefix: "https://treatment.plazi.org/id",
-  outputFile: "/workdir/plazi-treatments.nq",
+  outputFile: "/workdir/plazi-treatments.nq", // Deprecated - kept for backward compatibility
+  ntriplesDir: "/workdir/ntriples", // Directory for individual .nt files
 };
 
 export const ghActConfig: Config = {

@@ -1,13 +1,13 @@
 import { GHActWorker, type Job } from "./deps.ts";
 import { ghActConfig, nqConfig } from "../config/config.ts";
 import { existsSync } from "https://deno.land/x/ghact@1.2.6/src/deps.ts";
-import removeQuads from "./removeQuads.ts";
+import { graphUri } from "./utils.ts";
 
-
-const graphUri = (fileName: string) =>
-  `<${nqConfig.graphUriPrefix}/${
-    fileName.replace(/.*\//, "").replace(/\.ttl$/, "")
-  }>`;
+// Helper function to get the output .nt file path for a given .ttl file
+const getNTriplesPath = (ttlFile: string): string => {
+  const relativePath = ttlFile.replace(/\.ttl$/, ".nt");
+  return `${nqConfig.ntriplesDir}/${relativePath}`;
+};
 
 const _worker = new GHActWorker(
   self,
@@ -46,12 +46,23 @@ const _worker = new GHActWorker(
     removed = removed.filter((f) => f.endsWith(".ttl"));
     modified = modified.filter((f) => f.endsWith(".ttl"));
 
-    // modified implemented as removed and added
-    removed.push(...modified)
-    added.push(...modified)
-    if (existsSync(nqConfig.outputFile)) {
-      await removeQuads(nqConfig.outputFile, ...removed.map(file => graphUri(file)));
+    // Ensure ntriples directory exists
+    if (!existsSync(nqConfig.ntriplesDir)) {
+      await Deno.mkdir(nqConfig.ntriplesDir, { recursive: true });
     }
+
+    // Remove .nt files for removed turtle files
+    for (const file of removed) {
+      const ntPath = getNTriplesPath(file);
+      if (existsSync(ntPath)) {
+        await Deno.remove(ntPath);
+        log(` » removed ${ntPath}`);
+      }
+    }
+
+    // modified implemented as removed and added
+    added.push(...modified);
+    
     const results = await Promise.all(
       added.map(async (file) => {
         const fullFile = `${_worker.gitRepository.directory}/${file}`;
@@ -61,46 +72,39 @@ const _worker = new GHActWorker(
         
         try {
           const command = new Deno.Command("rapper", {
-            args: ["-i", "turtle", fullFile, "-o", "nquads"],
+            args: ["-i", "turtle", fullFile, "-o", "ntriples"],
             stdin: "piped",
             stdout: "piped",
           });
           const child = command.spawn();
           
-          // Use a temporary file per process to avoid conflicts
-          const tempFile = `${nqConfig.outputFile}.${file.replace(/\//g, '_')}.tmp`;
-          const outputFileHandle = await Deno.open(tempFile, { write: true, create: true, append: false });
+          // Create output directory if needed
+          const ntPath = getNTriplesPath(file);
+          const ntDir = ntPath.substring(0, ntPath.lastIndexOf('/'));
+          if (!existsSync(ntDir)) {
+            await Deno.mkdir(ntDir, { recursive: true });
+          }
           
-          child.stdout
-            .pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`))
-            .pipeTo(outputFileHandle.writable);
+          // Write output to individual .nt file
+          const outputFileHandle = await Deno.open(ntPath, { write: true, create: true, truncate: true });
+          
+          child.stdout.pipeTo(outputFileHandle.writable);
           
           child.stdin.close();
           const status = await child.status;
           
           if (!status.success) {
-            await Deno.remove(tempFile).catch(() => {});
             throw new Error(`Status: ${status.code}`);
           }
           
-          return { file, success: true, tempFile };
+          log(` » converted ${file} to ${ntPath}`);
+          return { file, success: true };
         } catch (error) {
           log(` » error in ${file}: ${error}`);
           return { file, success: false, error };
         }
       })
     );
-
-    // Merge temp files into main output file
-    const outputFileHandle = await Deno.open(nqConfig.outputFile, { write: true, create: true, append: true });
-    for (const result of results) {
-      if (result.success && result.tempFile) {
-        const tempContent = await Deno.readFile(result.tempFile);
-        await outputFileHandle.write(tempContent);
-        await Deno.remove(result.tempFile);
-      }
-    }
-    outputFileHandle.close();
 
     const failingFiles = results.filter(r => !r.success).map(r => r.file);
     const succeededOnce = results.some(r => r.success);
@@ -111,40 +115,10 @@ const _worker = new GHActWorker(
       throw new Error(`All failed`);
     } else if (failingFiles.length > 0) {
       log(`Some failed:\n ${failingFiles.join("\n ")}`);
-      return `Some failed: ${failingFiles.length} of ${modified.length} failed`;
+      return `Some failed: ${failingFiles.length} of ${added.length} failed`;
     } else {
       log("All succeeded");
       return "";
     }
   },
 );
-
-function replacePeriodAtEnd(s: string) {
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let leftover = "";
-
-  return new TransformStream({
-      transform(chunk, controller) {
-          // Decode the chunk and prepend leftover from previous call
-          const text : string = leftover + decoder.decode(chunk, { stream: true }) as string;
-
-          // Split into lines, keeping the last part as a possible leftover
-          const lines: string[] = text.split(/\r?\n/);
-          leftover = lines.pop() || ""; // Save the last (possibly incomplete) line
-
-          for (let line of lines) {
-              // Replace period at end of the line with 's'
-              line = line.replace(/\.$/, s);
-              controller.enqueue(encoder.encode(line + "\n"));
-          }
-      },
-      flush(controller) {
-          if (leftover) {
-              // Replace period at end of last line if it exists
-              leftover = leftover.replace(/\.$/, s);
-              controller.enqueue(encoder.encode(leftover));
-          }
-      }
-  });
-}
