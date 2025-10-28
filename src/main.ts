@@ -37,8 +37,9 @@ if (originalPort) {
   Deno.env.delete("PORT");
 }
 
-// Small delay to ensure webhook server starts
-await new Promise(resolve => setTimeout(resolve, 1000));
+// Small delay to allow webhook server to start
+// In production, GHActServer will be ready before requests arrive
+await new Promise(resolve => setTimeout(resolve, 100));
 
 // Create our own HTTP server for data endpoints and webhook forwarding
 await Deno.serve({ port: mainPort }, async (request: Request) => {
@@ -55,7 +56,8 @@ await Deno.serve({ port: mainPort }, async (request: Request) => {
   
   // Forward all other requests to GHActServer (webhooks, jobs, etc.)
   try {
-    const webhookUrl = new URL(url.pathname + url.search, `http://localhost:${webhookPort}`);
+    const webhookHost = Deno.env.get("WEBHOOK_HOST") || "localhost";
+    const webhookUrl = new URL(url.pathname + url.search, `http://${webhookHost}:${webhookPort}`);
     const response = await fetch(webhookUrl, {
       method: request.method,
       headers: request.headers,
@@ -69,10 +71,10 @@ await Deno.serve({ port: mainPort }, async (request: Request) => {
       headers: response.headers,
     });
   } catch (error) {
-    console.error("Error forwarding request:", error);
-    const message = error instanceof Error ? error.message : String(error);
-    return new Response(`Error: ${message}`, {
+    console.error("Error forwarding request to webhook server:", error);
+    return new Response("Service temporarily unavailable", {
       status: 502,
+      headers: { "Content-Type": "text/plain" },
     });
   }
 }).finished;
