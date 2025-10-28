@@ -1,7 +1,7 @@
 import { GHActWorker, type Job } from "./deps.ts";
 import { ghActConfig, nqConfig } from "../config/config.ts";
 import { existsSync } from "https://deno.land/x/ghact@1.2.6/src/deps.ts";
-import removeQuads from "./removeQuads.ts";
+import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 
 const graphUri = (fileName: string) =>
@@ -49,9 +49,22 @@ const _worker = new GHActWorker(
     // modified implemented as removed and added
     removed.push(...modified)
     added.push(...modified)
-    if (existsSync(nqConfig.outputFile)) {
-      await removeQuads(nqConfig.outputFile, ...removed.map(file => graphUri(file)));
+    
+    // Ensure ntriples directory exists
+    await Deno.mkdir(nqConfig.ntriplesDir, { recursive: true });
+    
+    // Remove n-triples files for removed turtle files
+    for (const file of removed) {
+      const ntFile = join(nqConfig.ntriplesDir, file.replace(/\.ttl$/, ".nt"));
+      try {
+        if (existsSync(ntFile)) {
+          await Deno.remove(ntFile);
+        }
+      } catch (error) {
+        log(` » error removing ${ntFile}: ${error}`);
+      }
     }
+    
     const results = await Promise.all(
       added.map(async (file) => {
         const fullFile = `${_worker.gitRepository.directory}/${file}`;
@@ -61,46 +74,37 @@ const _worker = new GHActWorker(
         
         try {
           const command = new Deno.Command("rapper", {
-            args: ["-i", "turtle", fullFile, "-o", "nquads"],
+            args: ["-i", "turtle", fullFile, "-o", "ntriples"],
             stdin: "piped",
             stdout: "piped",
           });
           const child = command.spawn();
           
-          // Use a temporary file per process to avoid conflicts
-          const tempFile = `${nqConfig.outputFile}.${file.replace(/\//g, '_')}.tmp`;
-          const outputFileHandle = await Deno.open(tempFile, { write: true, create: true, append: false });
+          // Create output file path maintaining directory structure
+          const ntFile = join(nqConfig.ntriplesDir, file.replace(/\.ttl$/, ".nt"));
+          const ntDir = dirname(ntFile);
           
-          child.stdout
-            .pipeThrough(replacePeriodAtEnd(` ${graphUri(file)} .`))
-            .pipeTo(outputFileHandle.writable);
+          // Ensure directory exists
+          await Deno.mkdir(ntDir, { recursive: true });
+          
+          const outputFileHandle = await Deno.open(ntFile, { write: true, create: true, truncate: true });
+          
+          child.stdout.pipeTo(outputFileHandle.writable);
           
           child.stdin.close();
           const status = await child.status;
           
           if (!status.success) {
-            await Deno.remove(tempFile).catch(() => {});
             throw new Error(`Status: ${status.code}`);
           }
           
-          return { file, success: true, tempFile };
+          return { file, success: true, ntFile };
         } catch (error) {
           log(` » error in ${file}: ${error}`);
           return { file, success: false, error };
         }
       })
     );
-
-    // Merge temp files into main output file
-    const outputFileHandle = await Deno.open(nqConfig.outputFile, { write: true, create: true, append: true });
-    for (const result of results) {
-      if (result.success && result.tempFile) {
-        const tempContent = await Deno.readFile(result.tempFile);
-        await outputFileHandle.write(tempContent);
-        await Deno.remove(result.tempFile);
-      }
-    }
-    outputFileHandle.close();
 
     const failingFiles = results.filter(r => !r.success).map(r => r.file);
     const succeededOnce = results.some(r => r.success);
@@ -118,33 +122,3 @@ const _worker = new GHActWorker(
     }
   },
 );
-
-function replacePeriodAtEnd(s: string) {
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let leftover = "";
-
-  return new TransformStream({
-      transform(chunk, controller) {
-          // Decode the chunk and prepend leftover from previous call
-          const text : string = leftover + decoder.decode(chunk, { stream: true }) as string;
-
-          // Split into lines, keeping the last part as a possible leftover
-          const lines: string[] = text.split(/\r?\n/);
-          leftover = lines.pop() || ""; // Save the last (possibly incomplete) line
-
-          for (let line of lines) {
-              // Replace period at end of the line with 's'
-              line = line.replace(/\.$/, s);
-              controller.enqueue(encoder.encode(line + "\n"));
-          }
-      },
-      flush(controller) {
-          if (leftover) {
-              // Replace period at end of last line if it exists
-              leftover = leftover.replace(/\.$/, s);
-              controller.enqueue(encoder.encode(leftover));
-          }
-      }
-  });
-}
