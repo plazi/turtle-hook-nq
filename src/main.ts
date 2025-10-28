@@ -7,30 +7,44 @@ const worker = new Worker(import.meta.resolve("./worker.ts"), {
 });
 
 // Port configuration
-const port = parseInt(Deno.env.get("PORT") || "4505");
+const mainPort = parseInt(Deno.env.get("PORT") || "4505");
+const webhookPort = mainPort + 1;
 
-console.log(`Starting Turtle-Hook-NQ server on port ${port}...`);
+console.log(`Starting Turtle-Hook-NQ server on port ${mainPort}...`);
 console.log(`Data endpoints:`);
 console.log(`  - /nquads - Get all data as N-Quads`);
 console.log(`  - /ntriples - Get all data as N-Triples`);
+console.log(`Webhook server on port ${webhookPort}`);
 
 // Start GHActServer on a different port for webhook handling
-const ghActPort = port + 1;
 const ghActServer = new GHActServer(worker, ghActConfig);
 
-// Override the port for GHActServer
-Deno.env.set("PORT", ghActPort.toString());
+// Override environment to use webhook port
+const originalPort = Deno.env.get("PORT");
+Deno.env.set("PORT", webhookPort.toString());
+
+// Start GHActServer in the background
 ghActServer.serve().then(() => {
-  console.log(`GHActServer (webhooks) running on port ${ghActPort}`);
+  console.log(`Webhook server ready on port ${webhookPort}`);
 }).catch(error => {
   console.error("GHActServer error:", error);
 });
 
-// Create our own HTTP server for data endpoints
-await Deno.serve({ port }, async (request: Request) => {
+// Restore original PORT
+if (originalPort) {
+  Deno.env.set("PORT", originalPort);
+} else {
+  Deno.env.delete("PORT");
+}
+
+// Small delay to ensure webhook server starts
+await new Promise(resolve => setTimeout(resolve, 1000));
+
+// Create our own HTTP server for data endpoints and webhook forwarding
+await Deno.serve({ port: mainPort }, async (request: Request) => {
   const url = new URL(request.url);
   
-  // Handle custom endpoints
+  // Handle data endpoints
   if (url.pathname === "/nquads") {
     return await handleNQuads();
   }
@@ -39,42 +53,26 @@ await Deno.serve({ port }, async (request: Request) => {
     return await handleNTriples();
   }
   
-  // Health check endpoint
-  if (url.pathname === "/" || url.pathname === "/health") {
-    return new Response(
-      JSON.stringify({
-        service: ghActConfig.title,
-        description: ghActConfig.description,
-        status: "running",
-        endpoints: {
-          nquads: "/nquads - Get all data as N-Quads",
-          ntriples: "/ntriples - Get all data as N-Triples",
-        },
-        webhook_port: ghActPort,
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+  // Forward all other requests to GHActServer (webhooks, jobs, etc.)
+  try {
+    const webhookUrl = new URL(url.pathname + url.search, `http://localhost:${webhookPort}`);
+    const response = await fetch(webhookUrl, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    });
+    
+    // Return the response from GHActServer
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    console.error("Error forwarding request:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(`Error: ${message}`, {
+      status: 502,
+    });
   }
-  
-  // Forward webhook requests to GHActServer
-  if (url.pathname.startsWith("/webhook") || url.pathname.startsWith("/job")) {
-    try {
-      const ghActUrl = new URL(url.pathname + url.search, `http://localhost:${ghActPort}`);
-      const response = await fetch(ghActUrl, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      });
-      return response;
-    } catch (error) {
-      return new Response(`Error forwarding to webhook handler: ${error}`, {
-        status: 502,
-      });
-    }
-  }
-  
-  return new Response("Not Found", { status: 404 });
 }).finished;
