@@ -1,14 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { handleNQuadsEndpoint, handleNTriplesEndpoint } from "./endpoints.ts";
-import { nqConfig } from "../config/config.ts";
-
-// Override the ntriplesDir for testing
-const originalNtriplesDir = nqConfig.ntriplesDir;
 
 Deno.test("handleNQuadsEndpoint - generates n-quads with graph names", async () => {
   // Create test directory structure
   const testDir = await Deno.makeTempDir();
-  nqConfig.ntriplesDir = testDir;
+  const testGraphUriPrefix = "https://treatment.plazi.org/id";
   
   try {
     // Create test n-triples files
@@ -27,8 +23,8 @@ Deno.test("handleNQuadsEndpoint - generates n-quads with graph names", async () 
     // Create a mock request
     const request = new Request("http://localhost:4505/nquads");
     
-    // Call the handler
-    const response = await handleNQuadsEndpoint(request);
+    // Call the handler with test config
+    const response = await handleNQuadsEndpoint(request, testDir, testGraphUriPrefix);
     
     // Verify response
     assertEquals(response.status, 200);
@@ -53,14 +49,12 @@ Deno.test("handleNQuadsEndpoint - generates n-quads with graph names", async () 
   } finally {
     // Cleanup
     await Deno.remove(testDir, { recursive: true });
-    nqConfig.ntriplesDir = originalNtriplesDir;
   }
 });
 
 Deno.test("handleNTriplesEndpoint - concatenates n-triples files", async () => {
   // Create test directory structure
   const testDir = await Deno.makeTempDir();
-  nqConfig.ntriplesDir = testDir;
   
   try {
     // Create test n-triples files
@@ -73,8 +67,8 @@ Deno.test("handleNTriplesEndpoint - concatenates n-triples files", async () => {
     // Create a mock request
     const request = new Request("http://localhost:4505/ntriples");
     
-    // Call the handler
-    const response = await handleNTriplesEndpoint(request);
+    // Call the handler with test config
+    const response = await handleNTriplesEndpoint(request, testDir);
     
     // Verify response
     assertEquals(response.status, 200);
@@ -92,21 +86,20 @@ Deno.test("handleNTriplesEndpoint - concatenates n-triples files", async () => {
   } finally {
     // Cleanup
     await Deno.remove(testDir, { recursive: true });
-    nqConfig.ntriplesDir = originalNtriplesDir;
   }
 });
 
 Deno.test("handleNQuadsEndpoint - handles empty directory", async () => {
   // Create test directory structure
   const testDir = await Deno.makeTempDir();
-  nqConfig.ntriplesDir = testDir;
+  const testGraphUriPrefix = "https://treatment.plazi.org/id";
   
   try {
     // Create a mock request
     const request = new Request("http://localhost:4505/nquads");
     
-    // Call the handler
-    const response = await handleNQuadsEndpoint(request);
+    // Call the handler with test config
+    const response = await handleNQuadsEndpoint(request, testDir, testGraphUriPrefix);
     
     // Verify response
     assertEquals(response.status, 200);
@@ -119,6 +112,5 @@ Deno.test("handleNQuadsEndpoint - handles empty directory", async () => {
   } finally {
     // Cleanup
     await Deno.remove(testDir, { recursive: true });
-    nqConfig.ntriplesDir = originalNtriplesDir;
   }
 });

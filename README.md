@@ -17,7 +17,12 @@ Rather than maintaining a single consolidated n-quads file, the system now keeps
 
 ## Testing
 
-Run unit tests:
+Run all unit tests:
+```bash
+deno test --allow-read --allow-write
+```
+
+Run specific test files:
 ```bash
 deno test --allow-read --allow-write src/removeQuads.test.ts
 deno test --allow-read --allow-write src/endpoints.test.ts

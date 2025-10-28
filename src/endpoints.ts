@@ -2,8 +2,8 @@ import { nqConfig } from "../config/config.ts";
 import { walk } from "https://deno.land/std@0.224.0/fs/mod.ts";
 import { join, relative } from "https://deno.land/std@0.224.0/path/mod.ts";
 
-const graphUri = (fileName: string) =>
-  `<${nqConfig.graphUriPrefix}/${
+const graphUri = (fileName: string, graphUriPrefix: string) =>
+  `<${graphUriPrefix}/${
     fileName.replace(/.*\//, "").replace(/\.nt$/, "")
   }>`;
 
@@ -11,19 +11,23 @@ const graphUri = (fileName: string) =>
  * Handles the /nquads endpoint - returns all data as n-quads
  * by concatenating n-triples files and adding graph names
  */
-export async function handleNQuadsEndpoint(request: Request): Promise<Response> {
+export async function handleNQuadsEndpoint(
+  request: Request, 
+  ntriplesDir: string = nqConfig.ntriplesDir,
+  graphUriPrefix: string = nqConfig.graphUriPrefix
+): Promise<Response> {
   try {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         try {
           // Walk through all .nt files in the ntriples directory
-          for await (const entry of walk(nqConfig.ntriplesDir, { 
+          for await (const entry of walk(ntriplesDir, { 
             exts: [".nt"],
             includeDirs: false,
           })) {
-            const relativePath = relative(nqConfig.ntriplesDir, entry.path);
-            const graph = graphUri(relativePath);
+            const relativePath = relative(ntriplesDir, entry.path);
+            const graph = graphUri(relativePath, graphUriPrefix);
             
             // Read the file and add graph names
             const content = await Deno.readTextFile(entry.path);
@@ -64,14 +68,17 @@ export async function handleNQuadsEndpoint(request: Request): Promise<Response> 
  * Handles the /ntriples endpoint - returns all data as n-triples
  * by concatenating n-triples files without graph names
  */
-export async function handleNTriplesEndpoint(request: Request): Promise<Response> {
+export async function handleNTriplesEndpoint(
+  request: Request,
+  ntriplesDir: string = nqConfig.ntriplesDir
+): Promise<Response> {
   try {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         try {
           // Walk through all .nt files in the ntriples directory
-          for await (const entry of walk(nqConfig.ntriplesDir, { 
+          for await (const entry of walk(ntriplesDir, { 
             exts: [".nt"],
             includeDirs: false,
           })) {
