@@ -58,7 +58,8 @@ export async function handleNQuadsEndpoint(
       },
     });
   } catch (error) {
-    return new Response(`Error generating n-quads: ${error.message}`, {
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(`Error generating n-quads: ${message}`, {
       status: 500,
     });
   }
@@ -102,7 +103,8 @@ export async function handleNTriplesEndpoint(
       },
     });
   } catch (error) {
-    return new Response(`Error generating n-triples: ${error.message}`, {
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(`Error generating n-triples: ${message}`, {
       status: 500,
     });
   }
