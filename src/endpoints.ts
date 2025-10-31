@@ -1,6 +1,6 @@
 import { nqConfig } from "../config/config.ts";
 import { walk } from "https://deno.land/std@0.224.0/fs/mod.ts";
-import { join, relative } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { relative } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 const graphUri = (fileName: string, graphUriPrefix: string) =>
   `<${graphUriPrefix}/${
@@ -11,11 +11,11 @@ const graphUri = (fileName: string, graphUriPrefix: string) =>
  * Handles the /nquads endpoint - returns all data as n-quads
  * by concatenating n-triples files and adding graph names
  */
-export async function handleNQuadsEndpoint(
-  request: Request, 
+export function handleNQuadsEndpoint(
+  _request: Request, 
   ntriplesDir: string = nqConfig.ntriplesDir,
   graphUriPrefix: string = nqConfig.graphUriPrefix
-): Promise<Response> {
+): Response {
   try {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -69,10 +69,10 @@ export async function handleNQuadsEndpoint(
  * Handles the /ntriples endpoint - returns all data as n-triples
  * by concatenating n-triples files without graph names
  */
-export async function handleNTriplesEndpoint(
-  request: Request,
+export function handleNTriplesEndpoint(
+  _request: Request,
   ntriplesDir: string = nqConfig.ntriplesDir
-): Promise<Response> {
+): Response {
   try {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

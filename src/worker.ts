@@ -3,12 +3,6 @@ import { ghActConfig, nqConfig } from "../config/config.ts";
 import { existsSync } from "https://deno.land/x/ghact@1.4.0/src/deps.ts";
 import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 
-
-const graphUri = (fileName: string) =>
-  `<${nqConfig.graphUriPrefix}/${
-    fileName.replace(/.*\//, "").replace(/\.ttl$/, "")
-  }>`;
-
 const _worker = new GHActWorker(
   self,
   ghActConfig,
