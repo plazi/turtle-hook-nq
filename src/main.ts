@@ -6,25 +6,19 @@ const worker = new Worker(import.meta.resolve("./worker.ts"), {
   type: "module",
 });
 
-// Custom handler that wraps GHAct functionality with our endpoints
-const customHandler = (request: Request, ghactHandler: (req: Request) => Promise<Response>): Response | Promise<Response> => {
-  const url = new URL(request.url);
-  
-  // Handle our custom endpoints first
-  if (url.pathname === "/nquads") {
-    console.log("Handling /nquads request");
-    return handleNQuadsEndpoint(request);
-  } else if (url.pathname === "/ntriples") {
-    console.log("Handling /ntriples request");
-    return handleNTriplesEndpoint(request);
-  }
-  
-  // Delegate to GHAct handler for all other paths
-  return ghactHandler(request);
-};
+// Create server with ghact 1.4.0 API
+const server = new GHActServer(worker, ghActConfig);
 
-// Create server with custom handler using ghact 1.4.0 API
-const server = new GHActServer(worker, ghActConfig, customHandler);
+// Register custom handlers for our endpoints
+server.addHandler("/nquads", "GET", (request: Request) => {
+  console.log("Handling /nquads request");
+  return handleNQuadsEndpoint(request);
+});
+
+server.addHandler("/ntriples", "GET", (request: Request) => {
+  console.log("Handling /ntriples request");
+  return handleNTriplesEndpoint(request);
+});
 
 console.log(`Starting Turtle-Hook-nq server...`);
 console.log(`Endpoints:`);

@@ -1,6 +1,5 @@
 import { nqConfig } from "../config/config.ts";
-import { walk } from "https://deno.land/std@0.224.0/fs/mod.ts";
-import { relative } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { walk, relative } from "./deps.ts";
 
 const graphUri = (fileName: string, graphUriPrefix: string) =>
   `<${graphUriPrefix}/${

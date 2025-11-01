@@ -1,7 +1,5 @@
-import { GHActWorker, type Job } from "./deps.ts";
+import { GHActWorker, type Job, existsSync, join, dirname } from "./deps.ts";
 import { ghActConfig, nqConfig } from "../config/config.ts";
-import { existsSync } from "https://deno.land/x/ghact@1.4.0/src/deps.ts";
-import { join, dirname } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 const _worker = new GHActWorker(
   self,
