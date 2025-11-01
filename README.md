@@ -24,6 +24,5 @@ deno test --allow-read --allow-write
 
 Run specific test files:
 ```bash
-deno test --allow-read --allow-write src/removeQuads.test.ts
 deno test --allow-read --allow-write src/endpoints.test.ts
 ```
