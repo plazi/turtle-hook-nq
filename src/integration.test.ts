@@ -65,7 +65,7 @@ Deno.test("Integration - server endpoints respond correctly", async () => {
     const serverErrors: string[] = [];
     
     // Read stdout/stderr in background
-    const stdoutReader = (async () => {
+    const _stdoutReader = (async () => {
       try {
         for await (const chunk of serverProcess!.stdout) {
           const text = new TextDecoder().decode(chunk);
@@ -77,7 +77,7 @@ Deno.test("Integration - server endpoints respond correctly", async () => {
       }
     })();
     
-    const stderrReader = (async () => {
+    const _stderrReader = (async () => {
       try {
         for await (const chunk of serverProcess!.stderr) {
           const text = new TextDecoder().decode(chunk);
