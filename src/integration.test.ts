@@ -10,6 +10,11 @@ Deno.test("Integration - server endpoints respond correctly", async () => {
   const ntriplesDir = join(testDir, "ntriples");
   await Deno.mkdir(ntriplesDir, { recursive: true });
   
+  console.log(`Test directory: ${testDir}`);
+  console.log(`N-Triples directory: ${ntriplesDir}`);
+  
+  let serverProcess: Deno.ChildProcess | undefined;
+  
   try {
     // Create test n-triples files
     await Deno.writeTextFile(
@@ -24,9 +29,17 @@ Deno.test("Integration - server endpoints respond correctly", async () => {
       '<http://example.org/s3> <http://example.org/p3> "object3" .\n'
     );
     
-    // Start the server in a subprocess
-    const port = 4506; // Use a different port to avoid conflicts
-    const serverProcess = new Deno.Command("deno", {
+    console.log("Test files created");
+    
+    // Find a free port
+    const listener = Deno.listen({ port: 0 });
+    const port = (listener.addr as Deno.NetAddr).port;
+    listener.close();
+    
+    console.log(`Using port: ${port}`);
+    
+    // Start the server in a subprocess, pointing it to our test data
+    serverProcess = new Deno.Command("deno", {
       args: [
         "run",
         "--allow-net",
@@ -39,71 +52,202 @@ Deno.test("Integration - server endpoints respond correctly", async () => {
       env: {
         ...Deno.env.toObject(),
         PORT: String(port),
+        WORKDIR: testDir, // Point to our test directory
+        GHTOKEN: Deno.env.get("GHTOKEN") ?? "test",
+        DENO_BACKTRACE: "1", // Enable full backtraces
       },
       stdout: "piped",
       stderr: "piped",
     }).spawn();
     
-    // Wait for server to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Collect server output for debugging
+    const serverOutput: string[] = [];
+    const serverErrors: string[] = [];
+    
+    // Read stdout/stderr in background
+    const stdoutReader = (async () => {
+      try {
+        for await (const chunk of serverProcess!.stdout) {
+          const text = new TextDecoder().decode(chunk);
+          serverOutput.push(text);
+          console.log("[SERVER]", text.trim());
+        }
+      } catch (_e) {
+        // stream closed
+      }
+    })();
+    
+    const stderrReader = (async () => {
+      try {
+        for await (const chunk of serverProcess!.stderr) {
+          const text = new TextDecoder().decode(chunk);
+          serverErrors.push(text);
+          console.error("[SERVER ERROR]", text.trim());
+        }
+      } catch (_e) {
+        // stream closed
+      }
+    })();
+    
+    // Wait for server to start by checking a simple endpoint
+    console.log("Waiting for server to start...");
+    const maxWaitMs = 10000;
+    const start = Date.now();
+    let serverStarted = false;
+    const timeoutIds: number[] = [];
+    
+    while (Date.now() - start < maxWaitMs) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1000);
+        timeoutIds.push(timeoutId);
+        
+        // Try to connect without reading the body
+        const resp = await fetch(`http://localhost:${port}/nquads`, {
+          method: "HEAD", // Use HEAD to avoid triggering stream processing
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        console.log(`Server responded with status: ${resp.status}`);
+        serverStarted = true;
+        break;
+      } catch (err) {
+        // ignore connection errors while waiting
+        if (err instanceof Error && err.name !== 'AbortError') {
+          console.log(`Connection attempt failed: ${err.message}, retrying...`);
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+    }
+    
+    // Clear any remaining timeouts from the startup loop
+    for (const id of timeoutIds) {
+      clearTimeout(id);
+    }
+    
+    if (!serverStarted) {
+      throw new Error(
+        `Server did not start within ${maxWaitMs}ms.\n` +
+        `stdout:\n${serverOutput.join("")}\n` +
+        `stderr:\n${serverErrors.join("")}`
+      );
+    }
+    
+    console.log("Server started successfully");
+    
+    // Give the server a moment to fully initialize
+    await new Promise((r) => setTimeout(r, 500));
+    
+    // Test /nquads endpoint
+    console.log("Testing /nquads endpoint...");
+    const nquadsController = new AbortController();
+    const nquadsTimeout = setTimeout(() => nquadsController.abort(), 10000);
     
     try {
-      // Test /nquads endpoint
-      console.log("Testing /nquads endpoint...");
-      const nquadsResponse = await fetch(`http://localhost:${port}/nquads`);
+      const nquadsResponse = await fetch(`http://localhost:${port}/nquads`, {
+        signal: nquadsController.signal,
+      });
+      console.log(`/nquads response status: ${nquadsResponse.status}`);
+      console.log(`/nquads response headers:`, Object.fromEntries(nquadsResponse.headers.entries()));
+      
       assertEquals(nquadsResponse.status, 200);
       assertEquals(nquadsResponse.headers.get("Content-Type"), "application/n-quads");
       
-      const nquadsText = await nquadsResponse.text();
-      console.log("N-Quads response length:", nquadsText.length);
+      // Read the response body chunk by chunk
+      const chunks: string[] = [];
+      const reader = nquadsResponse.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body reader");
+      }
       
-      // Since we can't easily set up test data with the actual server,
-      // just verify the endpoint is accessible and returns the right content type
+      try {
+        let chunkCount = 0;
+        while (true) {
+          console.log(`Reading chunk ${++chunkCount}...`);
+          const { done, value } = await reader.read();
+          if (done) {
+            console.log("Stream completed successfully");
+            break;
+          }
+          const text = new TextDecoder().decode(value);
+          chunks.push(text);
+          console.log(`Received chunk ${chunkCount}: ${text.length} bytes`);
+          
+          // Log first few chunks for debugging
+          if (chunkCount <= 3) {
+            console.log(`Chunk ${chunkCount} content preview:`, text.substring(0, 100));
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
       
-      // Test /ntriples endpoint
-      console.log("Testing /ntriples endpoint...");
-      const ntriplesResponse = await fetch(`http://localhost:${port}/ntriples`);
-      assertEquals(ntriplesResponse.status, 200);
-      assertEquals(ntriplesResponse.headers.get("Content-Type"), "application/n-triples");
+      const nquadsText = chunks.join("");
+      console.log("N-Quads total response length:", nquadsText.length);
+      console.log("N-Quads sample:", nquadsText.substring(0, 200));
       
-      const ntriplesText = await ntriplesResponse.text();
-      console.log("N-Triples response length:", ntriplesText.length);
-      
-      console.log("Integration tests passed!");
+      // Verify we got the expected data
+      assertEquals(nquadsText.includes("example.org/s1"), true);
+      assertEquals(nquadsText.includes("example.org/s2"), true);
+      assertEquals(nquadsText.includes("example.org/s3"), true);
+      assertEquals(nquadsText.includes("treatment.plazi.org/id/test1"), true);
+      assertEquals(nquadsText.includes("treatment.plazi.org/id/test2"), true);
+    } catch (e) {
+      console.error("Error fetching /nquads:", e);
+      console.error("Server output so far:", serverOutput.join(""));
+      console.error("Server errors so far:", serverErrors.join(""));
+      throw e;
     } finally {
-      // Clean up: kill the server process
-      serverProcess.kill("SIGTERM");
+      clearTimeout(nquadsTimeout);
+    }
+    
+    console.log("Integration tests passed!");
+  } finally {
+    // Clean up: kill the server process
+    if (serverProcess) {
+      console.log("Cleaning up server process...");
+      try {
+        serverProcess.kill("SIGTERM");
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes("already terminated")) {
+          console.warn("Server process was already terminated");
+        } else {
+          console.error("Error killing server process:", e);
+        }
+      }
+      
+      // Wait for process to exit
       await serverProcess.status;
     }
-  } finally {
+    
     // Cleanup test directory
+    console.log("Cleaning up test directory...");
     await Deno.remove(testDir, { recursive: true });
   }
 });
 
 /**
- * Simpler integration test that just verifies the endpoints are registered
+ * Unit test that verifies the endpoint handlers work correctly
  * without starting a full server
  */
 Deno.test("Integration - endpoints are accessible", async () => {
-  // This test can be expanded once we have better control over the test environment
-  // For now, we verify that the endpoint handlers work correctly
-  
   const testDir = await Deno.makeTempDir();
   const ntriplesDir = join(testDir, "ntriples");
   await Deno.mkdir(ntriplesDir, { recursive: true });
   
   try {
     // Create minimal test data
+    const testFile = join(ntriplesDir, "test.nt");
     await Deno.writeTextFile(
-      join(ntriplesDir, "test.nt"),
+      testFile,
       '<http://test.org/s> <http://test.org/p> "o" .\n'
     );
     
     // Import and test the endpoint handlers directly
     const { handleNQuadsEndpoint, handleNTriplesEndpoint } = await import("./endpoints.ts");
     
-    const request = new Request("http://localhost:4505/test");
+    const request = new Request("http://example.com/test");
     
     // Test N-Quads endpoint
     const nquadsResponse = handleNQuadsEndpoint(
@@ -114,10 +258,19 @@ Deno.test("Integration - endpoints are accessible", async () => {
     assertEquals(nquadsResponse.status, 200);
     assertEquals(nquadsResponse.headers.get("Content-Type"), "application/n-quads");
     
+    // Actually read the stream to verify it works
+    const nquadsText = await nquadsResponse.text();
+    assertEquals(nquadsText.includes("test.org/s"), true);
+    assertEquals(nquadsText.includes("treatment.plazi.org/id/test"), true);
+    
     // Test N-Triples endpoint
     const ntriplesResponse = handleNTriplesEndpoint(request, ntriplesDir);
     assertEquals(ntriplesResponse.status, 200);
     assertEquals(ntriplesResponse.headers.get("Content-Type"), "application/n-triples");
+    
+    // Actually read the stream to verify it works
+    const ntriplesText = await ntriplesResponse.text();
+    assertEquals(ntriplesText.includes("test.org/s"), true);
     
     console.log("Endpoint handlers are working correctly!");
   } finally {
