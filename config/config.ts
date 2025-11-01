@@ -1,9 +1,12 @@
 import { type Config } from "../src/deps.ts";
+import { join } from "../src/deps.ts";
+
+const workdir = Deno.env.get("WORKDIR") ?? "/workdir";
 
 export const nqConfig = {
   graphUriPrefix: "https://treatment.plazi.org/id",
   outputFile: "/workdir/plazi-treatments.nq", // Deprecated - kept for backward compatibility
-  ntriplesDir: "/workdir/ntriples", // Directory for individual n-triples files
+  ntriplesDir: join(workdir, "ntriples"), // Directory for individual n-triples files
 };
 
 export const ghActConfig: Config = {
@@ -14,5 +17,5 @@ export const ghActConfig: Config = {
   sourceRepositoryUri: "https://git.ld.plazi.org/plazi/treatments-rdf.git",
   sourceBranch: "main",
   sourceRepository: "plazi/treatments-rdf",
-  workDir: "/workdir",
+  workDir: workdir,
 };

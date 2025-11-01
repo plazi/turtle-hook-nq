@@ -26,4 +26,7 @@ console.log(`  - /nquads - Get all data as N-Quads`);
 console.log(`  - /ntriples - Get all data as N-Triples`);
 console.log(`  - Other paths handled by GHAct`);
 
-await server.serve(); // defaults to port 4505
+// Allow overriding the default port via the PORT environment variable (used by tests)
+const port = Number(Deno.env.get("PORT") ?? 4505);
+const listener = Deno.listen({ port, hostname: "0.0.0.0" });
+await server.serve(listener);
