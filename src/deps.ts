@@ -3,7 +3,7 @@ export {
   GHActServer,
   GHActWorker,
   type Job,
-} from "https://deno.land/x/ghact@1.4.0/mod.ts";
+} from "https://deno.land/x/ghact@1.4.1/mod.ts";
 
 export {
   dirname,
