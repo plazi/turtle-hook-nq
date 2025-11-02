@@ -1,9 +1,8 @@
 import { GHActWorker, type Job, existsSync, join, dirname } from "./deps.ts";
-import { ghActConfig, nqConfig } from "../config/config.ts";
+import { nqConfig } from "../config/config.ts";
 
 const _worker = new GHActWorker(
   self,
-  ghActConfig,
   async (job: Job, log): Promise<string> => {
     log(
       "Starting transformation\n" + JSON.stringify(job, undefined, 2),
@@ -18,7 +17,7 @@ const _worker = new GHActWorker(
       if ("added" in job.files) added = job.files.added;
       if ("removed" in job.files) removed = job.files.removed;
     } else if (job.from) {
-      const files = await _worker.gitRepository.getModifiedAfter(
+      const files = await _worker.gitRepository!.getModifiedAfter(
         job.from,
         job.till,
         log,
@@ -59,7 +58,7 @@ const _worker = new GHActWorker(
     
     const results = await Promise.all(
       added.map(async (file) => {
-        const fullFile = `${_worker.gitRepository.directory}/${file}`;
+        const fullFile = `${_worker.gitRepository!.directory}/${file}`;
         if (!existsSync(fullFile)) {
           return { file, success: true }; // Skip non-existent files
         }
