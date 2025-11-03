@@ -1,8 +1,8 @@
 FROM denoland/deno:2.5.6
 
-# Install cron
+# Install utilities
 RUN DEBIAN_FRONTEND=noninteractive apt-get update
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y procps psmisc git raptor2-utils
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y curl procps psmisc git raptor2-utils
 
 # The port that your application listens to.
 EXPOSE 4505
