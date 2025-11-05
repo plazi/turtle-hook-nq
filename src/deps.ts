@@ -3,4 +3,12 @@ export {
   GHActServer,
   GHActWorker,
   type Job,
-} from "https://deno.land/x/ghact@1.2.6/mod.ts";
+} from "https://deno.land/x/ghact@1.4.2/mod.ts";
+
+export {
+  dirname,
+  join,
+  relative,
+} from "https://deno.land/std@0.224.0/path/mod.ts";
+
+export { existsSync, walk } from "https://deno.land/std@0.224.0/fs/mod.ts";
