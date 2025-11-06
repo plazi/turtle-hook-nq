@@ -16,58 +16,43 @@ export function handleNQuadsEndpoint(
   graphUriPrefix: string = nqConfig.graphUriPrefix
 ): Response {
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        console.log(`[nquads] Starting to walk directory: ${ntriplesDir}`);
-        
-        let fileCount = 0;
-        // Walk through all .nt files in the ntriples directory
-        for await (const entry of walk(ntriplesDir, { 
-          exts: [".nt"],
-          includeDirs: false,
-        })) {
-          fileCount++;
-          const relativePath = relative(ntriplesDir, entry.path);
-          const graph = graphUri(relativePath, graphUriPrefix);
-          
-          // Stream the file line-by-line and add graph names to each triple
-          const file = await Deno.open(entry.path, { read: true });
-          try {
-            const lineStream = file.readable
-              .pipeThrough(new TextDecoderStream())
-              .pipeThrough(new TextLineStream());
 
-            for await (const line of lineStream) {
-              const trimmed = line.trim();
-              if (trimmed) {
-                // Replace the final period with graph + period
-                const nquad = trimmed.replace(/\.$/, ` ${graph} .`);
-                controller.enqueue(encoder.encode(nquad + "\n"));
-              }
-            }
-          } finally {
-            try {
-              file.close();
-            } catch (_e) {
-              // Ignore if the file was already closed by the stream
-            }
-          }
+  async function* generate() {
+    console.log(`[nquads] Starting to walk directory: ${ntriplesDir}`);
+    let fileCount = 0;
+
+    for await (const entry of walk(ntriplesDir, { 
+      exts: [".nt"],
+      includeDirs: false,
+    })) {
+      fileCount++;
+      const relativePath = relative(ntriplesDir, entry.path);
+      const graph = graphUri(relativePath, graphUriPrefix);
+
+      const file = await Deno.open(entry.path, { read: true });
+      try {
+        const lineStream = file.readable
+          .pipeThrough(new TextDecoderStream())
+          .pipeThrough(new TextLineStream());
+
+        for await (const line of lineStream) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          // Append graph per triple and emit a single chunk; production is pull-based
+          const nquad = trimmed.replace(/\.$/, ` ${graph} .`) + "\n";
+          yield encoder.encode(nquad);
         }
-        
-        console.log(`[nquads] Processed ${fileCount} files, closing stream`);
-        controller.close();
-      } catch (error) {
-        console.error(`[nquads] Error in stream:`, error);
-        try {
-          controller.error(error);
-        } catch (e) {
-          console.error(`[nquads] Failed to signal error to controller:`, e);
-        }
+      } finally {
+        try { file.close(); } catch (_e) { /* file may already be closed by the pipeline */ }
       }
-    },
-  });
-  
+    }
+
+    console.log(`[nquads] Processed ${fileCount} files`);
+  }
+
+  // Consumer-driven stream prevents unbounded queuing
+  const stream = ReadableStream.from(generate());
+
   return new Response(stream, {
     status: 200,
     headers: {
@@ -85,49 +70,35 @@ export function handleNTriplesEndpoint(
   _request: Request,
   ntriplesDir: string = nqConfig.ntriplesDir
 ): Response {
-  const stream = new ReadableStream({
-    async start(controller) {
+
+  async function* generate() {
+    console.log(`[ntriples] Starting to walk directory: ${ntriplesDir}`);
+    let fileCount = 0;
+
+    for await (const entry of walk(ntriplesDir, { 
+      exts: [".nt"],
+      includeDirs: false,
+    })) {
+      fileCount++;
+      const file = await Deno.open(entry.path, { read: true });
       try {
-        console.log(`[ntriples] Starting to walk directory: ${ntriplesDir}`);
-        
-        let fileCount = 0;
-        // Walk through all .nt files in the ntriples directory
-        for await (const entry of walk(ntriplesDir, { 
-          exts: [".nt"],
-          includeDirs: false,
-        })) {
-          fileCount++;
-          // Stream the file content as-is without loading entire file into memory
-          const file = await Deno.open(entry.path, { read: true });
-          try {
-            const reader = file.readable.getReader();
-            while (true) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              if (value) controller.enqueue(value);
-            }
-            reader.releaseLock();
-          } finally {
-            try {
-              file.close();
-            } catch (_e) {
-              // Ignore if already closed
-            }
-          }
+        const reader = file.readable.getReader();
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) yield value; // backpressure respected by ReadableStream.from
         }
-        
-        controller.close();
-      } catch (error) {
-        console.error(`[ntriples] Error in stream:`, error);
-        try {
-          controller.error(error);
-        } catch (e) {
-          console.error(`[ntriples] Failed to signal error to controller:`, e);
-        }
+        reader.releaseLock();
+      } finally {
+        try { file.close(); } catch (_e) { /* file may already be closed by the pipeline */ }
       }
-    },
-  });
-  
+    }
+
+    console.log(`[ntriples] Processed ${fileCount} files`);
+  }
+
+  const stream = ReadableStream.from(generate());
+
   return new Response(stream, {
     status: 200,
     headers: {
