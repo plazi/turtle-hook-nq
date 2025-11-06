@@ -12,3 +12,4 @@ export {
 } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 export { existsSync, walk } from "https://deno.land/std@0.224.0/fs/mod.ts";
+export { TextLineStream } from "https://deno.land/std@0.224.0/streams/text_line_stream.ts";

@@ -1,5 +1,5 @@
 import { nqConfig } from "../config/config.ts";
-import { walk, relative } from "./deps.ts";
+import { walk, relative, TextLineStream } from "./deps.ts";
 
 const graphUri = (fileName: string, graphUriPrefix: string) =>
   `<${graphUriPrefix}/${
@@ -31,16 +31,26 @@ export function handleNQuadsEndpoint(
           const relativePath = relative(ntriplesDir, entry.path);
           const graph = graphUri(relativePath, graphUriPrefix);
           
-          // Read the file and add graph names
-          const content = await Deno.readTextFile(entry.path);
-          const lines = content.split("\n");
-          
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed && trimmed.length > 0) {
-              // Replace the final period with graph + period
-              const nquad = trimmed.replace(/\.$/, ` ${graph} .`);
-              controller.enqueue(encoder.encode(nquad + "\n"));
+          // Stream the file line-by-line and add graph names to each triple
+          const file = await Deno.open(entry.path, { read: true });
+          try {
+            const lineStream = file.readable
+              .pipeThrough(new TextDecoderStream())
+              .pipeThrough(new TextLineStream());
+
+            for await (const line of lineStream) {
+              const trimmed = line.trim();
+              if (trimmed) {
+                // Replace the final period with graph + period
+                const nquad = trimmed.replace(/\.$/, ` ${graph} .`);
+                controller.enqueue(encoder.encode(nquad + "\n"));
+              }
+            }
+          } finally {
+            try {
+              file.close();
+            } catch (_e) {
+              // Ignore if the file was already closed by the stream
             }
           }
         }
@@ -75,7 +85,6 @@ export function handleNTriplesEndpoint(
   _request: Request,
   ntriplesDir: string = nqConfig.ntriplesDir
 ): Response {
-  const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       try {
@@ -87,10 +96,24 @@ export function handleNTriplesEndpoint(
           exts: [".nt"],
           includeDirs: false,
         })) {
-          fileCount++;         
-          // Read and stream the file content as-is
-          const content = await Deno.readTextFile(entry.path);
-          controller.enqueue(encoder.encode(content));
+          fileCount++;
+          // Stream the file content as-is without loading entire file into memory
+          const file = await Deno.open(entry.path, { read: true });
+          try {
+            const reader = file.readable.getReader();
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              if (value) controller.enqueue(value);
+            }
+            reader.releaseLock();
+          } finally {
+            try {
+              file.close();
+            } catch (_e) {
+              // Ignore if already closed
+            }
+          }
         }
         
         controller.close();
