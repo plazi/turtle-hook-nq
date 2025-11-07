@@ -15,11 +15,25 @@ export function handleNQuadsEndpoint(
   ntriplesDir: string = nqConfig.ntriplesDir,
   graphUriPrefix: string = nqConfig.graphUriPrefix
 ): Response {
-  const encoder = new TextEncoder();
 
   async function* generate() {
     console.log(`[nquads] Starting to walk directory: ${ntriplesDir}`);
     let fileCount = 0;
+    // Batch lines to reduce per-line allocations and GC pressure
+    const encoder = new TextEncoder();
+    const FLUSH_LINE_COUNT = 2048; // flush every ~2k lines (tunable)
+    const FLUSH_CHAR_THRESHOLD = 1 << 20; // ~1MB of characters (approximate)
+    let batch: string[] = [];
+    let batchCharCount = 0;
+    
+    function flushBatchSync(): Uint8Array | null {
+      if (batch.length === 0) return null;
+      const chunk = batch.join("");
+      batch = [];
+      batchCharCount = 0;
+      // Encode once per batch to minimize Uint8Array allocations
+      return encoder.encode(chunk);
+    }
 
     for await (const entry of walk(ntriplesDir, { 
       exts: [".nt"],
@@ -38,13 +52,27 @@ export function handleNQuadsEndpoint(
         for await (const line of lineStream) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          // Append graph per triple and emit a single chunk; production is pull-based
+          // Append graph per triple. Defer encoding until batch flush.
           const nquad = trimmed.replace(/\.$/, ` ${graph} .`) + "\n";
-          yield encoder.encode(nquad);
+          batch.push(nquad);
+          batchCharCount += nquad.length;
+          if (batch.length >= FLUSH_LINE_COUNT || batchCharCount >= FLUSH_CHAR_THRESHOLD) {
+            // Flush batch to the consumer respecting backpressure
+            const chunk = flushBatchSync();
+            if (chunk) {
+              yield chunk;
+            }
+          }
         }
       } finally {
         try { file.close(); } catch (_e) { /* file may already be closed by the pipeline */ }
       }
+    }
+
+    // Final flush (if any)
+    if (batch.length) {
+      const chunk = flushBatchSync();
+      if (chunk) yield chunk;
     }
 
     console.log(`[nquads] Processed ${fileCount} files`);
@@ -58,6 +86,7 @@ export function handleNQuadsEndpoint(
     headers: {
       "Content-Type": "application/n-quads",
       "Content-Disposition": "attachment; filename=data.nq",
+      "X-Stream-Mode": "generator-batched",
     },
   });
 }
@@ -104,6 +133,7 @@ export function handleNTriplesEndpoint(
     headers: {
       "Content-Type": "application/n-triples",
       "Content-Disposition": "attachment; filename=data.nt",
+      "X-Stream-Mode": "generator-batched",
     },
   });
 }
