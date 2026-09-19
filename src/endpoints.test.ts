@@ -172,3 +172,57 @@ Deno.test("handleNTriplesEndpoint - emits heartbeat comments when only duplicate
     await Deno.remove(testDir, { recursive: true });
   }
 });
+
+Deno.test("streaming - a stall in the middle of a file still produces heartbeats", async () => {
+  const testDir = await Deno.makeTempDir();
+  try {
+    // One single small file: no file boundary and no line-count checkpoint can
+    // rescue the timing here, only a timer can.
+    await Deno.writeTextFile(
+      `${testDir}/slow.nt`,
+      '<http://example.org/s1> <http://example.org/p1> "o1" .\n'
+    );
+    const openFile = Deno.open;
+    const stall = Promise.withResolvers<void>();
+    let stalled = false;
+    // Stall the read of the file itself, after the walk has found it.
+    Deno.open = async (path, opts) => {
+      stalled = true;
+      await stall.promise;
+      return await openFile(path, opts);
+    };
+
+    try {
+      const response = handleNTriplesEndpoint(
+        new Request("http://localhost:4505/ntriples"),
+        testDir,
+        { maxFlushIntervalMs: 10, heartbeatIntervalMs: 10 },
+      );
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      assertEquals(
+        decoder.decode((await reader.read()).value).startsWith("# turtle-hook-nq "),
+        true,
+      );
+
+      // While the read is stuck the client keeps hearing from us.
+      const heartbeat = decoder.decode((await reader.read()).value);
+      assertEquals(stalled, true);
+      assertEquals(heartbeat.startsWith("# still working: "), true, heartbeat);
+
+      stall.resolve();
+      let rest = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        rest += decoder.decode(value);
+      }
+      assertEquals(rest.includes('<http://example.org/s1>'), true, rest);
+      assertEquals(rest.includes("# export complete: 1 files, 1 unique triples"), true, rest);
+    } finally {
+      Deno.open = openFile;
+    }
+  } finally {
+    await Deno.remove(testDir, { recursive: true });
+  }
+});

@@ -47,6 +47,49 @@ const DEFAULT_STREAM_OPTIONS: Required<StreamOptions> = {
   heartbeatIntervalMs: 10_000,
 };
 
+type Paced<T> = { type: "value"; value: T } | { type: "tick" };
+
+/**
+ * Yields the values of `source`, plus a `tick` whenever the source has not
+ * produced a value for `intervalMs`. The ticks come from a timer, so they also
+ * arrive while the source is blocked on a single slow operation (opening a
+ * file, waiting for the next line of a slow read, walking a huge directory) -
+ * something a checkpoint inside the source's own loop cannot guarantee.
+ */
+async function* withTicks<T>(
+  source: AsyncIterable<T>,
+  intervalMs: number,
+): AsyncGenerator<Paced<T>> {
+  const iterator = source[Symbol.asyncIterator]();
+  const TICK = Symbol("tick");
+  let pending: Promise<IteratorResult<T>> | null = null;
+  try {
+    while (true) {
+      pending ??= iterator.next();
+      let timer: number | undefined;
+      const timeout = new Promise<typeof TICK>((resolve) => {
+        timer = setTimeout(() => resolve(TICK), intervalMs);
+      });
+      const result = await Promise.race([pending, timeout]);
+      clearTimeout(timer);
+      if (result === TICK) {
+        yield { type: "tick" };
+        continue;
+      }
+      // The race is over, the next loop needs a fresh `iterator.next()`.
+      pending = null;
+      if (result.done) return;
+      yield { type: "value", value: result.value };
+    }
+  } finally {
+    // The consumer left (or threw) while a read was still in flight: keep the
+    // abandoned promise from surfacing as an unhandled rejection and let the
+    // source run its own cleanup (closing the current file).
+    pending?.catch(() => {});
+    await iterator.return?.();
+  }
+}
+
 /**
  * Walks `ntriplesDir`, reads every `.nt` file and yields the (deduplicated)
  * triples as encoded chunks. With `graphUriPrefix` set every triple gets the
@@ -86,15 +129,12 @@ async function* streamNTriplesFiles(
   let batch: string[] = [];
   let batchCharCount = 0;
   let lastChunkSentAt = Date.now();
-  const PROGRESS_CHECK_LINES = 1024;
-  let linesSinceProgressCheck = 0;
 
   function flushBatchSync(): Uint8Array | null {
     if (batch.length === 0) return null;
     const chunk = batch.join("");
     batch = [];
     batchCharCount = 0;
-    lastChunkSentAt = Date.now();
     // Encode once per batch to minimize Uint8Array allocations
     return encoder.encode(chunk);
   }
@@ -111,80 +151,99 @@ async function* streamNTriplesFiles(
       return idleMs >= opts.maxFlushIntervalMs ? flushBatchSync() : null;
     }
     if (idleMs < opts.heartbeatIntervalMs) return null;
-    lastChunkSentAt = Date.now();
     return encoder.encode(
       `# still working: ${fileCount} files read, ${seenTriples.size} unique triples so far\n`,
     );
   }
 
-  for await (const entry of walk(ntriplesDir, {
-    exts: [".nt"],
-    includeDirs: false,
-  })) {
-    fileCount++;
-    const graph = graphUriPrefix === undefined
-      ? undefined
-      : graphUri(relative(ntriplesDir, entry.path), graphUriPrefix);
+  /**
+   * The actual work: everything it yields is data for the client. It never
+   * looks at the clock - the timer in `withTicks` below does that.
+   */
+  async function* produceChunks(): AsyncGenerator<Uint8Array> {
+    for await (const entry of walk(ntriplesDir, {
+      exts: [".nt"],
+      includeDirs: false,
+    })) {
+      fileCount++;
+      const graph = graphUriPrefix === undefined
+        ? undefined
+        : graphUri(relative(ntriplesDir, entry.path), graphUriPrefix);
 
-    const file = await Deno.open(entry.path, { read: true });
-    try {
-      const lineStream = file.readable
-        .pipeThrough(new TextDecoderStream())
-        .pipeThrough(new TextLineStream());
-
-      for await (const line of lineStream) {
-        // Check progress every so often, in case one file is very large.
-        if (++linesSinceProgressCheck >= PROGRESS_CHECK_LINES) {
-          linesSinceProgressCheck = 0;
-          const chunk = progressChunk();
-          if (chunk) yield chunk;
-        }
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        // Deduplication check using memory-efficient 64-bit hash
-        const hash = fnv1a64(trimmed);
-        if (seenTriples.has(hash)) continue;
-        seenTriples.add(hash);
-
-        // Append graph per triple. Defer encoding until batch flush.
-        const out = (graph === undefined
-          ? trimmed
-          : trimmed.replace(/\s*\.$/, ` ${graph} .`)) + "\n";
-        batch.push(out);
-        batchCharCount += out.length;
-        if (
-          batch.length >= opts.flushLineCount ||
-          batchCharCount >= opts.flushCharThreshold
-        ) {
-          // Flush batch to the consumer respecting backpressure
-          const chunk = flushBatchSync();
-          if (chunk) yield chunk;
-        }
-      }
-    } finally {
+      const file = await Deno.open(entry.path, { read: true });
       try {
-        file.close();
-      } catch (_e) { /* file may already be closed by the pipeline */ }
+        const lineStream = file.readable
+          .pipeThrough(new TextDecoderStream())
+          .pipeThrough(new TextLineStream());
+
+        for await (const line of lineStream) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          // Deduplication check using memory-efficient 64-bit hash
+          const hash = fnv1a64(trimmed);
+          if (seenTriples.has(hash)) continue;
+          seenTriples.add(hash);
+
+          // Append graph per triple. Defer encoding until batch flush.
+          const out = (graph === undefined
+            ? trimmed
+            : trimmed.replace(/\s*\.$/, ` ${graph} .`)) + "\n";
+          batch.push(out);
+          batchCharCount += out.length;
+          if (
+            batch.length >= opts.flushLineCount ||
+            batchCharCount >= opts.flushCharThreshold
+          ) {
+            // Flush batch to the consumer respecting backpressure
+            const chunk = flushBatchSync();
+            if (chunk) yield chunk;
+          }
+        }
+      } finally {
+        try {
+          file.close();
+        } catch (_e) { /* file may already be closed by the pipeline */ }
+      }
+
+      // A file boundary is a cheap, deterministic place to look at the clock,
+      // whatever the timer below happened to do.
+      const chunk = progressChunk();
+      if (chunk) yield chunk;
     }
 
-    const chunk = progressChunk();
+    // Final flush (if any)
+    const chunk = flushBatchSync();
     if (chunk) yield chunk;
+
+    const message =
+      `${fileCount} files, ${seenTriples.size} unique triples, took ${
+        ((Date.now() - startedAt.getTime()) / 1000).toFixed(1)
+      }s`;
+    console.log(`[${label}] Completed export: ${message}`);
+    yield encoder.encode(`# export complete: ${message}\n`);
   }
 
-  // Final flush (if any)
-  const chunk = flushBatchSync();
-  if (chunk) yield chunk;
+  // Look at the clock at least as often as the shortest promise we make, so a
+  // stall anywhere in produceChunks() is noticed within one interval.
+  const tickMs = Math.max(
+    1,
+    Math.min(opts.maxFlushIntervalMs, opts.heartbeatIntervalMs),
+  );
 
-  const message =
-    `${fileCount} files, ${seenTriples.size} unique triples, took ${
-      ((Date.now() - startedAt.getTime()) / 1000).toFixed(1)
-    }s`;
-  console.log(`[${label}] Completed export: ${message}`);
-  yield encoder.encode(`# export complete: ${message}\n`);
-
-  // Free up set memory aggressively once complete
-  seenTriples.clear();
+  try {
+    for await (const event of withTicks(produceChunks(), tickMs)) {
+      const chunk = event.type === "tick" ? progressChunk() : event.value;
+      if (!chunk) continue;
+      yield chunk;
+      // Set after the yield returns: while the consumer is slow to read, it is
+      // the consumer that is busy, not us, and it needs no heartbeat.
+      lastChunkSentAt = Date.now();
+    }
+  } finally {
+    // Free up set memory aggressively once complete
+    seenTriples.clear();
+  }
 }
 
 /**
