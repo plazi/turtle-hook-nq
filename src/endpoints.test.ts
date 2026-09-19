@@ -89,6 +89,57 @@ Deno.test("handleNTriplesEndpoint - concatenates n-triples files", async () => {
   }
 });
 
+Deno.test("export trailer counts files that still carry http:// plazi subjects", async () => {
+  const testDir = await Deno.makeTempDir();
+  const testGraphUriPrefix = "https://treatment.plazi.org/id";
+
+  try {
+    // regenerated since gg2rdf#33: subject and graph agree
+    await Deno.writeTextFile(
+      `${testDir}/AAAA.nt`,
+      '<https://treatment.plazi.org/id/AAAA> <http://example.org/p> "o" .\n',
+    );
+    // written before gg2rdf#33: http:// subject in an https:// graph
+    await Deno.writeTextFile(
+      `${testDir}/BBBB.nt`,
+      '<http://treatment.plazi.org/id/BBBB> <http://example.org/p> "o" .\n' +
+      '<http://taxon-name.plazi.org/id/Animalia/Genus> <http://example.org/p> "o" .\n',
+    );
+    // foreign http:// subjects are not plazi's and do not count
+    await Deno.writeTextFile(
+      `${testDir}/CCCC.nt`,
+      '<http://example.org/s> <http://example.org/p> "o" .\n',
+    );
+
+    const request = new Request("http://localhost:4505/nquads");
+    const response = await handleNQuadsEndpoint(request, testDir, testGraphUriPrefix);
+    const text = await response.text();
+
+    const trailer = text.trim().split("\n").at(-1)!;
+    assertEquals(trailer.startsWith("# export complete: 3 files"), true, trailer);
+    assertEquals(trailer.includes("1 files still with http:// plazi subjects"), true, trailer);
+    // the data itself is passed through untouched
+    assertEquals(text.includes("<http://treatment.plazi.org/id/BBBB>"), true);
+  } finally {
+    await Deno.remove(testDir, { recursive: true });
+  }
+});
+
+Deno.test("export trailer is silent when no file carries http:// plazi subjects", async () => {
+  const testDir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${testDir}/AAAA.nt`,
+      '<https://treatment.plazi.org/id/AAAA> <http://example.org/p> "o" .\n',
+    );
+    const response = await handleNTriplesEndpoint(new Request("http://localhost:4505/ntriples"), testDir);
+    const trailer = (await response.text()).trim().split("\n").at(-1)!;
+    assertEquals(trailer.includes("http:// plazi subjects"), false, trailer);
+  } finally {
+    await Deno.remove(testDir, { recursive: true });
+  }
+});
+
 Deno.test("handleNQuadsEndpoint - handles empty directory", async () => {
   // Create test directory structure
   const testDir = await Deno.makeTempDir();
