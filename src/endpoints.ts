@@ -6,6 +6,14 @@ const graphUri = (fileName: string, graphUriPrefix: string) =>
     fileName.replace(/.*\//, "").replace(/\.nt$/, "")
   }>`;
 
+/**
+ * Subjects gg2rdf wrote before plazi/gg2rdf#33 made `https://` canonical. A
+ * file that still has them was not regenerated since, and its treatment does
+ * not share the IRI of the graph it is placed in.
+ */
+const LEGACY_HTTP_SUBJECT =
+  /^<http:\/\/(treatment|taxon-name|taxon-concept|publication|tb)\.plazi\.org\//;
+
 const FNV_PRIME = 1099511628211n;
 const FNV_OFFSET = 14695981039346656037n;
 
@@ -100,7 +108,9 @@ async function* withTicks<T>(
  * walk starts, so the client receives a first body byte immediately. Comment
  * lines (`# ...`) are part of the N-Triples/N-Quads grammar and are ignored
  * by RDF parsers. A final comment line reports the number of files and
- * triples, so a truncated download can be told apart from a complete one.
+ * triples, so a truncated download can be told apart from a complete one — and
+ * how many files still carry `http://` Plazi subjects, which predate
+ * plazi/gg2rdf#33 and no longer match the `https://` graph they land in.
  */
 async function* streamNTriplesFiles(
   label: string,
@@ -120,6 +130,7 @@ async function* streamNTriplesFiles(
   console.log(`[${label}] Starting to walk directory: ${ntriplesDir}`);
 
   let fileCount = 0;
+  let legacyFileCount = 0;
 
   // Memory-efficient deduplication using 64-bit integer hashes (FNV-1a)
   // Avoids storing full string triples in memory (drastically reduces RAM usage)
@@ -171,6 +182,7 @@ async function* streamNTriplesFiles(
         : graphUri(relative(ntriplesDir, entry.path), graphUriPrefix);
 
       const file = await Deno.open(entry.path, { read: true });
+      let legacy = false;
       try {
         const lineStream = file.readable
           .pipeThrough(new TextDecoderStream())
@@ -179,6 +191,7 @@ async function* streamNTriplesFiles(
         for await (const line of lineStream) {
           const trimmed = line.trim();
           if (!trimmed) continue;
+          if (!legacy && LEGACY_HTTP_SUBJECT.test(trimmed)) legacy = true;
 
           // Deduplication check using memory-efficient 64-bit hash
           const hash = fnv1a64(trimmed);
@@ -205,6 +218,7 @@ async function* streamNTriplesFiles(
           file.close();
         } catch (_e) { /* file may already be closed by the pipeline */ }
       }
+      if (legacy) legacyFileCount++;
 
       // A file boundary is a cheap, deterministic place to look at the clock,
       // whatever the timer below happened to do.
@@ -216,10 +230,13 @@ async function* streamNTriplesFiles(
     const chunk = flushBatchSync();
     if (chunk) yield chunk;
 
+    const legacyNote = legacyFileCount === 0
+      ? ""
+      : `, ${legacyFileCount} files still with http:// plazi subjects (pre-gg2rdf#33, regenerate)`;
     const message =
       `${fileCount} files, ${seenTriples.size} unique triples, took ${
         ((Date.now() - startedAt.getTime()) / 1000).toFixed(1)
-      }s`;
+      }s${legacyNote}`;
     console.log(`[${label}] Completed export: ${message}`);
     yield encoder.encode(`# export complete: ${message}\n`);
   }
