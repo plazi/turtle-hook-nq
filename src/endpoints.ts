@@ -20,92 +20,187 @@ function fnv1a64(str: string): bigint {
 }
 
 /**
- * Handles the /nquads endpoint - returns all data as n-quads
+ * Tunables for the streaming behaviour of the export endpoints.
+ */
+export interface StreamOptions {
+  /** Flush the pending batch once it holds this many lines. */
+  flushLineCount?: number;
+  /** Flush the pending batch once it holds roughly this many characters. */
+  flushCharThreshold?: number;
+  /**
+   * Flush the pending batch (even if small) when the last chunk was sent
+   * longer than this many milliseconds ago, so callers keep seeing progress.
+   */
+  maxFlushIntervalMs?: number;
+  /**
+   * When nothing at all could be sent for this many milliseconds (e.g. a long
+   * run of files whose triples were all duplicates), emit a comment line as a
+   * heartbeat so callers can tell "still working" from "hung".
+   */
+  heartbeatIntervalMs?: number;
+}
 
+const DEFAULT_STREAM_OPTIONS: Required<StreamOptions> = {
+  flushLineCount: 2048, // flush every ~2k lines (tunable)
+  flushCharThreshold: 1 << 20, // ~1MB of characters (approximate)
+  maxFlushIntervalMs: 2_000,
+  heartbeatIntervalMs: 10_000,
+};
+
+/**
+ * Walks `ntriplesDir`, reads every `.nt` file and yields the (deduplicated)
+ * triples as encoded chunks. With `graphUriPrefix` set every triple gets the
+ * graph derived from its file name appended, i.e. the output is N-Quads,
+ * otherwise it is N-Triples.
+ *
+ * The very first chunk is a comment line and is yielded before the directory
+ * walk starts, so the client receives a first body byte immediately. Comment
+ * lines (`# ...`) are part of the N-Triples/N-Quads grammar and are ignored
+ * by RDF parsers. A final comment line reports the number of files and
+ * triples, so a truncated download can be told apart from a complete one.
+ */
+async function* streamNTriplesFiles(
+  label: string,
+  ntriplesDir: string,
+  graphUriPrefix: string | undefined,
+  options: StreamOptions,
+): AsyncGenerator<Uint8Array> {
+  const opts = { ...DEFAULT_STREAM_OPTIONS, ...options };
+  const format = graphUriPrefix === undefined ? "N-Triples" : "N-Quads";
+  const encoder = new TextEncoder();
+  const startedAt = new Date();
+
+  // First byte for the client, before any file system access.
+  yield encoder.encode(
+    `# turtle-hook-nq ${format} export started ${startedAt.toISOString()}\n`,
+  );
+  console.log(`[${label}] Starting to walk directory: ${ntriplesDir}`);
+
+  let fileCount = 0;
+
+  // Memory-efficient deduplication using 64-bit integer hashes (FNV-1a)
+  // Avoids storing full string triples in memory (drastically reduces RAM usage)
+  const seenTriples = new Set<bigint>();
+
+  // Batch lines to reduce per-line allocations and GC pressure
+  let batch: string[] = [];
+  let batchCharCount = 0;
+  let lastChunkSentAt = Date.now();
+  const PROGRESS_CHECK_LINES = 1024;
+  let linesSinceProgressCheck = 0;
+
+  function flushBatchSync(): Uint8Array | null {
+    if (batch.length === 0) return null;
+    const chunk = batch.join("");
+    batch = [];
+    batchCharCount = 0;
+    lastChunkSentAt = Date.now();
+    // Encode once per batch to minimize Uint8Array allocations
+    return encoder.encode(chunk);
+  }
+
+  /**
+   * Keeps the client informed even when batches fill slowly (small files,
+   * slow disk, long runs of duplicate triples): returns the pending batch when
+   * it has been waiting for too long, a heartbeat comment when there was
+   * nothing at all to send for even longer, and null otherwise.
+   */
+  function progressChunk(): Uint8Array | null {
+    const idleMs = Date.now() - lastChunkSentAt;
+    if (batch.length > 0) {
+      return idleMs >= opts.maxFlushIntervalMs ? flushBatchSync() : null;
+    }
+    if (idleMs < opts.heartbeatIntervalMs) return null;
+    lastChunkSentAt = Date.now();
+    return encoder.encode(
+      `# still working: ${fileCount} files read, ${seenTriples.size} unique triples so far\n`,
+    );
+  }
+
+  for await (const entry of walk(ntriplesDir, {
+    exts: [".nt"],
+    includeDirs: false,
+  })) {
+    fileCount++;
+    const graph = graphUriPrefix === undefined
+      ? undefined
+      : graphUri(relative(ntriplesDir, entry.path), graphUriPrefix);
+
+    const file = await Deno.open(entry.path, { read: true });
+    try {
+      const lineStream = file.readable
+        .pipeThrough(new TextDecoderStream())
+        .pipeThrough(new TextLineStream());
+
+      for await (const line of lineStream) {
+        // Check progress every so often, in case one file is very large.
+        if (++linesSinceProgressCheck >= PROGRESS_CHECK_LINES) {
+          linesSinceProgressCheck = 0;
+          const chunk = progressChunk();
+          if (chunk) yield chunk;
+        }
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        // Deduplication check using memory-efficient 64-bit hash
+        const hash = fnv1a64(trimmed);
+        if (seenTriples.has(hash)) continue;
+        seenTriples.add(hash);
+
+        // Append graph per triple. Defer encoding until batch flush.
+        const out = (graph === undefined
+          ? trimmed
+          : trimmed.replace(/\s*\.$/, ` ${graph} .`)) + "\n";
+        batch.push(out);
+        batchCharCount += out.length;
+        if (
+          batch.length >= opts.flushLineCount ||
+          batchCharCount >= opts.flushCharThreshold
+        ) {
+          // Flush batch to the consumer respecting backpressure
+          const chunk = flushBatchSync();
+          if (chunk) yield chunk;
+        }
+      }
+    } finally {
+      try {
+        file.close();
+      } catch (_e) { /* file may already be closed by the pipeline */ }
+    }
+
+    const chunk = progressChunk();
+    if (chunk) yield chunk;
+  }
+
+  // Final flush (if any)
+  const chunk = flushBatchSync();
+  if (chunk) yield chunk;
+
+  const message =
+    `${fileCount} files, ${seenTriples.size} unique triples, took ${
+      ((Date.now() - startedAt.getTime()) / 1000).toFixed(1)
+    }s`;
+  console.log(`[${label}] Completed export: ${message}`);
+  yield encoder.encode(`# export complete: ${message}\n`);
+
+  // Free up set memory aggressively once complete
+  seenTriples.clear();
+}
+
+/**
+ * Handles the /nquads endpoint - returns all data as n-quads
  * by concatenating n-triples files and adding graph names
  */
 export function handleNQuadsEndpoint(
-  _request: Request, 
+  _request: Request,
   ntriplesDir: string = nqConfig.ntriplesDir,
-  graphUriPrefix: string = nqConfig.graphUriPrefix
+  graphUriPrefix: string = nqConfig.graphUriPrefix,
+  options: StreamOptions = {},
 ): Response {
-
-  async function* generate() {
-    console.log(`[nquads] Starting to walk directory: ${ntriplesDir}`);
-    let fileCount = 0;
-    
-    // Memory-efficient deduplication using 64-bit integer hashes (FNV-1a)
-    // Avoids storing full string triples in memory (drastically reduces RAM usage)
-    const seenTriples = new Set<bigint>();
-
-    // Batch lines to reduce per-line allocations and GC pressure
-    const encoder = new TextEncoder();
-
-    const FLUSH_LINE_COUNT = 2048; // flush every ~2k lines (tunable)
-    const FLUSH_CHAR_THRESHOLD = 1 << 20; // ~1MB of characters (approximate)
-    let batch: string[] = [];
-    let batchCharCount = 0;
-    
-    function flushBatchSync(): Uint8Array | null {
-      if (batch.length === 0) return null;
-      const chunk = batch.join("");
-      batch = [];
-      batchCharCount = 0;
-      // Encode once per batch to minimize Uint8Array allocations
-      return encoder.encode(chunk);
-    }
-
-    for await (const entry of walk(ntriplesDir, { 
-      exts: [".nt"],
-      includeDirs: false,
-    })) {
-      fileCount++;
-      const relativePath = relative(ntriplesDir, entry.path);
-      const graph = graphUri(relativePath, graphUriPrefix);
-
-      const file = await Deno.open(entry.path, { read: true });
-      try {
-        const lineStream = file.readable
-          .pipeThrough(new TextDecoderStream())
-          .pipeThrough(new TextLineStream());
-
-        for await (const line of lineStream) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          
-          // Deduplication check using memory-efficient 64-bit hash
-          const hash = fnv1a64(trimmed);
-          if (seenTriples.has(hash)) continue;
-          seenTriples.add(hash);
-          
-          // Append graph per triple. Defer encoding until batch flush.
-          const nquad = trimmed.replace(/\.$/, ` ${graph} .`) + "\n";
-          batch.push(nquad);
-          batchCharCount += nquad.length;
-          if (batch.length >= FLUSH_LINE_COUNT || batchCharCount >= FLUSH_CHAR_THRESHOLD) {
-            // Flush batch to the consumer respecting backpressure
-            const chunk = flushBatchSync();
-            if (chunk) {
-              yield chunk;
-            }
-          }
-        }
-      } finally {
-        try { file.close(); } catch (_e) { /* file may already be closed by the pipeline */ }
-      }
-    }
-
-    // Final flush (if any)
-    if (batch.length) {
-      const chunk = flushBatchSync();
-      if (chunk) yield chunk;
-    }
-
-    console.log(`[nquads] Processed ${fileCount} files`);
-  }
-
   // Consumer-driven stream prevents unbounded queuing
-  const stream = ReadableStream.from(generate());
+  const stream = ReadableStream.from(
+    streamNTriplesFiles("nquads", ntriplesDir, graphUriPrefix, options),
+  );
 
   return new Response(stream, {
     status: 200,
@@ -123,79 +218,12 @@ export function handleNQuadsEndpoint(
  */
 export function handleNTriplesEndpoint(
   _request: Request,
-  ntriplesDir: string = nqConfig.ntriplesDir
+  ntriplesDir: string = nqConfig.ntriplesDir,
+  options: StreamOptions = {},
 ): Response {
-
-  async function* generate() {
-    console.log(`[ntriples] Starting to walk directory: ${ntriplesDir}`);
-    let fileCount = 0;
-    
-    // Memory-efficient deduplication using 64-bit integer hashes
-    const seenTriples = new Set<bigint>();
-    
-    // Batching to minimize GC pressure
-    const encoder = new TextEncoder();
-    const FLUSH_LINE_COUNT = 2048; 
-    const FLUSH_CHAR_THRESHOLD = 1 << 20; 
-    let batch: string[] = [];
-    let batchCharCount = 0;
-
-    function flushBatchSync(): Uint8Array | null {
-      if (batch.length === 0) return null;
-      const chunk = batch.join("");
-      batch = [];
-      batchCharCount = 0;
-      return encoder.encode(chunk);
-    }
-
-    for await (const entry of walk(ntriplesDir, { 
-      exts: [".nt"],
-      includeDirs: false,
-    })) {
-      fileCount++;
-      const file = await Deno.open(entry.path, { read: true });
-      try {
-        const lineStream = file.readable
-          .pipeThrough(new TextDecoderStream())
-          .pipeThrough(new TextLineStream());
-
-        for await (const line of lineStream) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          
-          // Deduplication Check via low-memory 64-bit hash
-          const hash = fnv1a64(trimmed);
-          if (seenTriples.has(hash)) continue;
-          seenTriples.add(hash);
-
-          const ntriple = trimmed + "\n";
-          batch.push(ntriple);
-          batchCharCount += ntriple.length;
-          
-          if (batch.length >= FLUSH_LINE_COUNT || batchCharCount >= FLUSH_CHAR_THRESHOLD) {
-            const chunk = flushBatchSync();
-            if (chunk) yield chunk;
-          }
-        }
-      } finally {
-        try { file.close(); } catch (_e) { /* closed by pipeline */ }
-      }
-    }
-
-    // Final flush
-    if (batch.length) {
-      const chunk = flushBatchSync();
-      if (chunk) yield chunk;
-    }
-
-    // Optional: Log deduplication results
-    console.log(`[ntriples] Processed ${fileCount} files. Streamed ${seenTriples.size} unique triples.`);
-    
-    // Free up set memory aggressively once complete
-    seenTriples.clear();
-  }
-
-  const stream = ReadableStream.from(generate());
+  const stream = ReadableStream.from(
+    streamNTriplesFiles("ntriples", ntriplesDir, undefined, options),
+  );
 
   return new Response(stream, {
     status: 200,

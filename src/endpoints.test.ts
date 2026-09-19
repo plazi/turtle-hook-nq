@@ -39,10 +39,10 @@ Deno.test("handleNQuadsEndpoint - generates n-quads with graph names", async () 
     assertEquals(text.includes('<http://example.org/s1>'), true);
     assertEquals(text.includes('<http://example.org/s3>'), true);
     
-    // Verify lines end with graph name and period
+    // Verify data lines end with graph name and period (comment lines are allowed)
     const lines = text.trim().split("\n");
     for (const line of lines) {
-      if (line.trim()) {
+      if (line.trim() && !line.startsWith("#")) {
         assertEquals(line.includes("> ."), true, `Line should end with > .: ${line}`);
       }
     }
@@ -107,10 +107,68 @@ Deno.test("handleNQuadsEndpoint - handles empty directory", async () => {
     // Read the response body
     const text = await response.text();
     
-    // Should be empty or whitespace only
-    assertEquals(text.trim(), "");
+    // Should contain nothing but the start/end comment lines
+    const dataLines = text.split("\n").filter((l) => l.trim() && !l.startsWith("#"));
+    assertEquals(dataLines, []);
+    assertEquals(text.includes("# export complete: 0 files, 0 unique triples"), true);
   } finally {
     // Cleanup
+    await Deno.remove(testDir, { recursive: true });
+  }
+});
+
+Deno.test("handleNQuadsEndpoint - first chunk is sent before any file is read", async () => {
+  const testDir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${testDir}/test1.nt`,
+      '<http://example.org/s1> <http://example.org/p1> "o1" .\n'
+    );
+    const response = handleNQuadsEndpoint(new Request("http://localhost:4505/nquads"), testDir, "https://treatment.plazi.org/id");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+
+    // The first chunk is a comment line, so callers get a first byte immediately
+    const first = decoder.decode((await reader.read()).value);
+    assertEquals(first.startsWith("# turtle-hook-nq N-Quads export started "), true, first);
+    assertEquals(first.endsWith("\n"), true);
+    assertEquals(first.includes("example.org"), false);
+
+    // Then the data, then the completion marker
+    let rest = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      rest += decoder.decode(value);
+    }
+    const lines = rest.trim().split("\n");
+    assertEquals(lines[0], '<http://example.org/s1> <http://example.org/p1> "o1" <https://treatment.plazi.org/id/test1> .');
+    assertEquals(lines[lines.length - 1].startsWith("# export complete: 1 files, 1 unique triples"), true, lines[lines.length - 1]);
+  } finally {
+    await Deno.remove(testDir, { recursive: true });
+  }
+});
+
+Deno.test("handleNTriplesEndpoint - emits heartbeat comments when only duplicates are found", async () => {
+  const testDir = await Deno.makeTempDir();
+  try {
+    const content = '<http://example.org/s1> <http://example.org/p1> "o1" .\n';
+    // a.nt is read first; b.nt and c.nt only contain duplicates and produce no data
+    await Deno.writeTextFile(`${testDir}/a.nt`, content);
+    await Deno.writeTextFile(`${testDir}/b.nt`, content);
+    await Deno.writeTextFile(`${testDir}/c.nt`, content);
+
+    const response = handleNTriplesEndpoint(
+      new Request("http://localhost:4505/ntriples"),
+      testDir,
+      { maxFlushIntervalMs: 0, heartbeatIntervalMs: 0 },
+    );
+    const text = await response.text();
+    const lines = text.trim().split("\n");
+    assertEquals(lines.filter((l) => !l.startsWith("#")), [content.trim()]);
+    assertEquals(lines.filter((l) => l.startsWith("# still working: ")).length >= 1, true, text);
+    assertEquals(lines[lines.length - 1].startsWith("# export complete: 3 files, 1 unique triples"), true);
+  } finally {
     await Deno.remove(testDir, { recursive: true });
   }
 });

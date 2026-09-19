@@ -13,6 +13,14 @@ The server provides the following web endpoints:
 
 Both endpoints stream data directly from disk (line-by-line for `/nquads`) to keep memory usage low even for very large datasets.
 
+Because a full export walks every n-triples file, a complete response takes several minutes for a large dataset. To let callers tell "still working" from "hung", the response is not silent while this happens:
+
+- the first line, sent immediately, is a comment (`# turtle-hook-nq N-Quads export started <timestamp>`),
+- pending data is flushed at least every few seconds, and if nothing could be sent for a while a comment line `# still working: ...` is emitted,
+- the last line is `# export complete: <n> files, <m> unique triples, took <s>s`, so a truncated download can be recognized.
+
+Comment lines are part of the N-Triples/N-Quads grammar and are ignored by RDF parsers. Duplicate triples (identical lines in several files) are emitted only once.
+
 ## File Structure
 
 Rather than maintaining a single consolidated n-quads file, the system now keeps individual n-triples files matching the turtle file structure. When turtle files are added, modified, or removed, the corresponding n-triples files are updated in the `/workdir/ntriples` directory.
