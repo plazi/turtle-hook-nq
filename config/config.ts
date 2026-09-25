@@ -7,6 +7,7 @@ export const nqConfig = {
   graphUriPrefix: "https://treatment.plazi.org/id",
   outputFile: "/workdir/plazi-treatments.nq", // Deprecated - kept for backward compatibility
   ntriplesDir: join(workdir, "ntriples"), // Directory for individual n-triples files
+  jobsDir: join(workdir, "jobs"), // GHAct job directories (for the `till` of the export)
 };
 
 export const ghActConfig: Config = {
