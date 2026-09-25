@@ -1,23 +1,10 @@
 import { nqConfig } from "../config/config.ts";
-import { walk, relative, TextLineStream } from "./deps.ts";
+import { createHash, join, relative, TextLineStream, walk } from "./deps.ts";
 
 const graphUri = (fileName: string, graphUriPrefix: string) =>
   `<${graphUriPrefix}/${
     fileName.replace(/.*\//, "").replace(/\.nt$/, "")
   }>`;
-
-const FNV_PRIME = 1099511628211n;
-const FNV_OFFSET = 14695981039346656037n;
-
-function fnv1a64(str: string): bigint {
-  let hash = FNV_OFFSET;
-  for (let i = 0; i < str.length; i++) {
-    hash ^= BigInt(str.charCodeAt(i));
-    hash *= FNV_PRIME;
-    hash = BigInt.asUintN(64, hash);
-  }
-  return hash;
-}
 
 /**
  * Tunables for the streaming behaviour of the export endpoints.
@@ -38,6 +25,11 @@ export interface StreamOptions {
    * heartbeat so callers can tell "still working" from "hung".
    */
   heartbeatIntervalMs?: number;
+  /**
+   * GHAct job directory; the `till` commit of the newest completed job is
+   * reported in the final `# END` line.
+   */
+  jobsDir?: string;
 }
 
 const DEFAULT_STREAM_OPTIONS: Required<StreamOptions> = {
@@ -45,7 +37,38 @@ const DEFAULT_STREAM_OPTIONS: Required<StreamOptions> = {
   flushCharThreshold: 1 << 20, // ~1MB of characters (approximate)
   maxFlushIntervalMs: 2_000,
   heartbeatIntervalMs: 10_000,
+  jobsDir: nqConfig.jobsDir,
 };
+
+/**
+ * Returns the `till` commit of the newest completed job in `jobsDir`, i.e. the
+ * repository state the n-triples files reflect at least. Job directories are
+ * named by their ISO start time, so they sort chronologically.
+ */
+export async function latestCompletedTill(
+  jobsDir: string,
+): Promise<string | undefined> {
+  const names: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(jobsDir)) {
+      if (entry.isDirectory) names.push(entry.name);
+    }
+  } catch (_e) {
+    return undefined; // no jobs (yet)
+  }
+  names.sort().reverse();
+  for (const name of names) {
+    try {
+      const status = JSON.parse(
+        await Deno.readTextFile(join(jobsDir, name, "status.json")),
+      );
+      if (status.status === "completed" && status.job?.till) {
+        return status.job.till;
+      }
+    } catch (_e) { /* job without a readable status */ }
+  }
+  return undefined;
+}
 
 type Paced<T> = { type: "value"; value: T } | { type: "tick" };
 
@@ -70,8 +93,12 @@ async function* withTicks<T>(
       const timeout = new Promise<typeof TICK>((resolve) => {
         timer = setTimeout(() => resolve(TICK), intervalMs);
       });
-      const result = await Promise.race([pending, timeout]);
-      clearTimeout(timer);
+      let result: IteratorResult<T> | typeof TICK;
+      try {
+        result = await Promise.race([pending, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
       if (result === TICK) {
         yield { type: "tick" };
         continue;
@@ -99,8 +126,18 @@ async function* withTicks<T>(
  * The very first chunk is a comment line and is yielded before the directory
  * walk starts, so the client receives a first body byte immediately. Comment
  * lines (`# ...`) are part of the N-Triples/N-Quads grammar and are ignored
- * by RDF parsers. A final comment line reports the number of files and
- * triples, so a truncated download can be told apart from a complete one.
+ * by RDF parsers.
+ *
+ * The very last line is `# END till=<commit> lines=<n> sha256=<hex>`, where
+ * `n` is the number of lines before it and the hash covers all bytes before
+ * it. Only a complete export has this line, so a consumer can reject a
+ * truncated download: the last line must be the sentinel and
+ * `head -n -1 | wc -l` and `head -n -1 | sha256sum` must match it.
+ *
+ * Duplicate triples are only removed within a file. Across files they are
+ * kept: in N-Quads they belong to different graphs, and a global set of seen
+ * triples cannot scale (a JavaScript Set holds at most 2^24 entries, which cut
+ * every export off after 16,777,216 triples).
  */
 async function* streamNTriplesFiles(
   label: string,
@@ -113,17 +150,27 @@ async function* streamNTriplesFiles(
   const encoder = new TextEncoder();
   const startedAt = new Date();
 
+  // Everything sent before the `# END` line goes into its line count and hash
+  const sha256 = createHash("sha256");
+  let lineCount = 0;
+  function counted(chunk: Uint8Array): Uint8Array {
+    sha256.update(chunk);
+    for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, i + 1)) {
+      lineCount++;
+    }
+    return chunk;
+  }
+
   // First byte for the client, before any file system access.
-  yield encoder.encode(
+  yield counted(encoder.encode(
     `# turtle-hook-nq ${format} export started ${startedAt.toISOString()}\n`,
-  );
-  console.log(`[${label}] Starting to walk directory: ${ntriplesDir}`);
+  ));
+  // Read before the walk: the files reflect at least this commit.
+  const till = await latestCompletedTill(opts.jobsDir) ?? "unknown";
+  console.log(`[${label}] Starting to walk directory: ${ntriplesDir} (till ${till})`);
 
   let fileCount = 0;
-
-  // Memory-efficient deduplication using 64-bit integer hashes (FNV-1a)
-  // Avoids storing full string triples in memory (drastically reduces RAM usage)
-  const seenTriples = new Set<bigint>();
+  let tripleCount = 0;
 
   // Batch lines to reduce per-line allocations and GC pressure
   let batch: string[] = [];
@@ -152,7 +199,7 @@ async function* streamNTriplesFiles(
     }
     if (idleMs < opts.heartbeatIntervalMs) return null;
     return encoder.encode(
-      `# still working: ${fileCount} files read, ${seenTriples.size} unique triples so far\n`,
+      `# still working: ${fileCount} files read, ${tripleCount} triples so far\n`,
     );
   }
 
@@ -176,14 +223,14 @@ async function* streamNTriplesFiles(
           .pipeThrough(new TextDecoderStream())
           .pipeThrough(new TextLineStream());
 
+        // Duplicates within one file only, see above
+        const seenInFile = new Set<string>();
         for await (const line of lineStream) {
           const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          // Deduplication check using memory-efficient 64-bit hash
-          const hash = fnv1a64(trimmed);
-          if (seenTriples.has(hash)) continue;
-          seenTriples.add(hash);
+          if (!trimmed || trimmed.startsWith("#")) continue;
+          if (seenInFile.has(trimmed)) continue;
+          seenInFile.add(trimmed);
+          tripleCount++;
 
           // Append graph per triple. Defer encoding until batch flush.
           const out = (graph === undefined
@@ -217,7 +264,7 @@ async function* streamNTriplesFiles(
     if (chunk) yield chunk;
 
     const message =
-      `${fileCount} files, ${seenTriples.size} unique triples, took ${
+      `${fileCount} files, ${tripleCount} triples, took ${
         ((Date.now() - startedAt.getTime()) / 1000).toFixed(1)
       }s`;
     console.log(`[${label}] Completed export: ${message}`);
@@ -235,15 +282,21 @@ async function* streamNTriplesFiles(
     for await (const event of withTicks(produceChunks(), tickMs)) {
       const chunk = event.type === "tick" ? progressChunk() : event.value;
       if (!chunk) continue;
-      yield chunk;
+      yield counted(chunk);
       // Set after the yield returns: while the consumer is slow to read, it is
       // the consumer that is busy, not us, and it needs no heartbeat.
       lastChunkSentAt = Date.now();
     }
-  } finally {
-    // Free up set memory aggressively once complete
-    seenTriples.clear();
+  } catch (e) {
+    // The response is already under way (status 200), so the client can only
+    // notice the missing `# END` line; make sure the server log tells why.
+    console.error(`[${label}] Export aborted: ${e}`);
+    throw e;
   }
+
+  yield encoder.encode(
+    `# END till=${till} lines=${lineCount} sha256=${sha256.digest("hex")}\n`,
+  );
 }
 
 /**

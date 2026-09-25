@@ -17,9 +17,24 @@ Because a full export walks every n-triples file, a complete response takes seve
 
 - the first line, sent immediately, is a comment (`# turtle-hook-nq N-Quads export started <timestamp>`),
 - pending data is flushed at least every few seconds, and if nothing could be sent for a while a comment line `# still working: ...` is emitted,
-- the last line is `# export complete: <n> files, <m> unique triples, took <s>s`, so a truncated download can be recognized.
+- then `# export complete: <n> files, <m> triples, took <s>s`,
+- and the very last line is the sentinel `# END till=<commit> lines=<n> sha256=<hex>`.
 
-Comment lines are part of the N-Triples/N-Quads grammar and are ignored by RDF parsers. Duplicate triples (identical lines in several files) are emitted only once.
+Comment lines are part of the N-Triples/N-Quads grammar and are ignored by RDF parsers.
+
+### Verifying a download
+
+The response status is sent before the export runs, so a failed or cut-off export still looks like a successful HTTP 200. Only a complete export ends with the `# END` line: `till` is the commit of the newest completed job when the export started, `lines` the number of lines before the sentinel and `sha256` the hash of all bytes before it. Check all of it before using a download:
+
+```bash
+curl -fsS https://hooknq.ld.plazi.org/nquads -o data.nq
+end=$(tail -n 1 data.nq)
+[[ $end =~ ^#\ END\ till=([0-9a-f]+|unknown)\ lines=([0-9]+)\ sha256=([0-9a-f]{64})$ ]] || { echo "truncated"; exit 1; }
+[ "$(head -n -1 data.nq | wc -l)" = "${BASH_REMATCH[2]}" ] || { echo "line count mismatch"; exit 1; }
+[ "$(head -n -1 data.nq | sha256sum | cut -d' ' -f1)" = "${BASH_REMATCH[3]}" ] || { echo "hash mismatch"; exit 1; }
+```
+
+Duplicate triples are removed within a file only. Across files they are kept: in N-Quads they belong to different graphs (one per treatment), and stores deduplicate on load anyway. (A global set of seen triples used to cut every export off after 2^24 = 16,777,216 triples, the maximum size of a JavaScript `Set`.)
 
 ## File Structure
 
