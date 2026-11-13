@@ -8,6 +8,7 @@ export const nqConfig = {
   outputFile: "/workdir/plazi-treatments.nq", // Deprecated - kept for backward compatibility
   ntriplesDir: join(workdir, "ntriples"), // Directory for individual n-triples files
   jobsDir: join(workdir, "jobs"), // GHAct job directories (for the `till` of the export)
+  rapperConcurrency: 16, // rapper processes run at once while converting a job's files
 };
 
 export const ghActConfig: Config = {

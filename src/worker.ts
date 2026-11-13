@@ -1,5 +1,6 @@
 import { GHActWorker, type Job, existsSync, join, dirname } from "./deps.ts";
 import { nqConfig } from "../config/config.ts";
+import { mapLimited, ttlWork } from "./files.ts";
 
 const _worker = new GHActWorker(
   self,
@@ -33,13 +34,8 @@ const _worker = new GHActWorker(
       );
     }
 
-    added = added.filter((f) => f.endsWith(".ttl"));
-    removed = removed.filter((f) => f.endsWith(".ttl"));
-    modified = modified.filter((f) => f.endsWith(".ttl"));
-
     // modified implemented as removed and added
-    removed.push(...modified)
-    added.push(...modified)
+    ({ toAdd: added, toRemove: removed } = ttlWork({ added, modified, removed }));
     
     // Ensure ntriples directory exists
     await Deno.mkdir(nqConfig.ntriplesDir, { recursive: true });
@@ -56,8 +52,12 @@ const _worker = new GHActWorker(
       }
     }
     
-    const results = await Promise.all(
-      added.map(async (file) => {
+    // bounded, so a commit touching every file does not spawn one rapper
+    // process per file at once
+    const results = await mapLimited(
+      added,
+      nqConfig.rapperConcurrency,
+      async (file) => {
         const fullFile = `${_worker.gitRepository!.directory}/${file}`;
         if (!existsSync(fullFile)) {
           return { file, success: true }; // Skip non-existent files
@@ -94,7 +94,7 @@ const _worker = new GHActWorker(
           log(` » error in ${file}: ${error}`);
           return { file, success: false, error };
         }
-      })
+      },
     );
 
     const failingFiles = results.filter(r => !r.success).map(r => r.file);
